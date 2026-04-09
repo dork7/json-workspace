@@ -1,8 +1,8 @@
-export function uid() {
+export function uid(): string {
   return crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function parseJsonSafe(text) {
+export function parseJsonSafe(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
   try {
     return { ok: true, value: JSON.parse(text) };
   } catch (e) {
@@ -10,20 +10,19 @@ export function parseJsonSafe(text) {
   }
 }
 
-export function formatJsonString(text) {
+export function formatJsonString(text: string): string | null {
   const p = parseJsonSafe(text);
   if (!p.ok) return null;
   return JSON.stringify(p.value, null, 2);
 }
 
-export function minifyJsonString(text) {
+export function minifyJsonString(text: string): string | null {
   const p = parseJsonSafe(text);
   if (!p.ok) return null;
   return JSON.stringify(p.value);
 }
 
-/** Pretty JSON for compare; invalid JSON returns raw text */
-export function displayTextForCompare(text) {
+export function displayTextForCompare(text: string): string {
   const f = formatJsonString(text);
   return f !== null ? f : text;
 }
