@@ -17,11 +17,19 @@ import {
   uid,
 } from '@/lib/json-utils';
 import { deriveTabName } from '@/lib/tab-names';
+import {
+  CLOSED_TABS_STORAGE_KEY,
+  MAX_CLOSED_HISTORY,
+  WORKSPACE_STORAGE_KEY,
+  type ClosedTabSnapshot,
+  parseClosedHistory,
+  parseWorkspace,
+} from '@/lib/workspace-storage';
+import type { Tab } from '@/lib/workspace-types';
 
 const WATCH_STORAGE_KEY = 'json-workspace-watch-v1';
 const WATCH_VALUE_MAX = 4000;
 
-type Tab = { id: string; name: string; text: string };
 type WatchEntry = { id: string; expr: string };
 
 function formatWatchDisplay(v: unknown): string {
@@ -66,6 +74,8 @@ export function JsonWorkspace() {
     { id: 'tab-0', name: '', text: '{\n  \n}' },
   ]);
   const [activeId, setActiveId] = useState('tab-0');
+  const [hydrated, setHydrated] = useState(false);
+  const [closedHistory, setClosedHistory] = useState<ClosedTabSnapshot[]>([]);
   const [watchEntries, setWatchEntries] = useState<WatchEntry[]>([]);
   const [editView, setEditView] = useState<'text' | 'tree'>('text');
   const [compareOpen, setCompareOpen] = useState(false);
@@ -142,13 +152,32 @@ export function JsonWorkspace() {
   }, [watchEntries]);
 
   useEffect(() => {
-    setTabs((prev) =>
-      prev.map((t) => {
-        const name = deriveTabName(t.text);
-        if (name === null || t.name === name) return t;
-        return { ...t, name };
-      })
-    );
+    try {
+      const w = parseWorkspace(
+        typeof window !== 'undefined'
+          ? localStorage.getItem(WORKSPACE_STORAGE_KEY)
+          : null
+      );
+      if (w) {
+        const tabsFixed = w.tabs.map((t) => {
+          const n = deriveTabName(t.text);
+          if (n !== null && t.name !== n) return { ...t, name: n };
+          return t;
+        });
+        setTabs(tabsFixed);
+        setActiveId(w.activeId);
+      }
+      setClosedHistory(
+        parseClosedHistory(
+          typeof window !== 'undefined'
+            ? localStorage.getItem(CLOSED_TABS_STORAGE_KEY)
+            : null
+        )
+      );
+    } catch {
+      /* ignore */
+    }
+    queueMicrotask(() => setHydrated(true));
   }, []);
 
   const scheduleTabNameRefresh = useCallback(() => {
@@ -182,6 +211,36 @@ export function JsonWorkspace() {
       tabs.some((t) => t.id === b) ? b : (tabs[1] ?? tabs[0]).id
     );
   }, [tabs]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          WORKSPACE_STORAGE_KEY,
+          JSON.stringify({ tabs, activeId })
+        );
+      } catch {
+        /* ignore */
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [tabs, activeId, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          CLOSED_TABS_STORAGE_KEY,
+          JSON.stringify(closedHistory)
+        );
+      } catch {
+        /* ignore */
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [closedHistory, hydrated]);
 
   const updateActiveText = useCallback(
     (text: string) => {
@@ -220,12 +279,37 @@ export function JsonWorkspace() {
     if (tabs.length <= 1) return;
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx === -1) return;
+    const closing = tabs[idx];
+    setClosedHistory((prev) => {
+      const snap: ClosedTabSnapshot = {
+        id: uid(),
+        name: closing.name,
+        text: closing.text,
+        closedAt: Date.now(),
+      };
+      return [snap, ...prev].slice(0, MAX_CLOSED_HISTORY);
+    });
     const next = tabs.filter((t) => t.id !== id);
     setTabs(next);
     if (activeId === id) {
       const ni = Math.max(0, idx - 1);
       setActiveId(next[ni].id);
     }
+  };
+
+  const restoreClosed = (snap: ClosedTabSnapshot) => {
+    const newId = uid();
+    setTabs((prev) => [
+      ...prev,
+      { id: newId, name: snap.name, text: snap.text },
+    ]);
+    setActiveId(newId);
+    setClosedHistory((prev) => prev.filter((x) => x.id !== snap.id));
+    setFindQuery('');
+  };
+
+  const dismissClosed = (snap: ClosedTabSnapshot) => {
+    setClosedHistory((prev) => prev.filter((x) => x.id !== snap.id));
   };
 
   const newTab = () => {
@@ -475,6 +559,49 @@ export function JsonWorkspace() {
           <button type="button" className="btn" onClick={onCompare}>
             Show diff side by side
           </button>
+        </div>
+
+        <div className="history-panel">
+          <h2 className="history-heading">History</h2>
+          <p className="history-hint muted">
+            Recently closed tabs are saved here and in your browser. Restore to
+            open them again.
+          </p>
+          {closedHistory.length === 0 ? (
+            <p className="history-empty muted">No closed tabs yet.</p>
+          ) : (
+            <ul className="history-list">
+              {closedHistory.map((snap) => (
+                <li key={snap.id} className="history-item">
+                  <div className="history-item-main">
+                    <span className="history-item-title">
+                      {snap.name || 'Untitled'}
+                    </span>
+                    <span className="history-item-time muted">
+                      {new Date(snap.closedAt).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="history-item-actions">
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={() => restoreClosed(snap)}
+                    >
+                      Restore
+                    </button>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      aria-label="Remove from history"
+                      onClick={() => dismissClosed(snap)}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </aside>
 

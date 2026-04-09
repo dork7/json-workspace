@@ -260,6 +260,79 @@ body {
   font-size: 13px;
 }
 
+.history-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: min(32vh, 280px);
+  flex-shrink: 0;
+}
+
+.history-heading {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.history-hint {
+  margin: 0 0 0.5rem;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.history-empty {
+  margin: 0;
+  font-size: 11px;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.history-item {
+  padding: 0.4rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.history-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.35rem;
+}
+
+.history-item-title {
+  font-size: 12px;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.history-item-time {
+  font-size: 9px;
+}
+
+.history-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .main {
   display: flex;
   flex-direction: column;
