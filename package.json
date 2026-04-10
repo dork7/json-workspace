@@ -73,6 +73,9 @@
         "deb"
       ],
       "category": "Development"
+    },
+    "publish": {
+      "provider": "github"
     }
   }
 }
