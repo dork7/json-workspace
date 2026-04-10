@@ -632,7 +632,7 @@ export function JsonWorkspace() {
           </button>
         </div>
 
-        <details className="history-panel" open>
+        <details className="history-panel" open={false}>
           <summary className="history-summary">History</summary>
           <div className="history-panel-body">
             <p className="history-hint muted">
