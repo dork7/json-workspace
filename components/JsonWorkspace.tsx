@@ -490,9 +490,6 @@ export function JsonWorkspace() {
       <aside className="sidebar">
         <div className="sidebar-head">
           <h1 className="sidebar-title">Workspace</h1>
-          <button type="button" className="btn primary" onClick={newTab}>
-            + New tab
-          </button>
         </div>
 
         <div className="watch-panel">
@@ -566,6 +563,12 @@ export function JsonWorkspace() {
           </ul>
         </div>
 
+        <div className="sidebar-new-tab">
+          <button type="button" className="btn primary" onClick={newTab}>
+            + New tab
+          </button>
+        </div>
+
         <ul className="tab-list" role="tablist" aria-label="Open tabs">
           {tabs.map((tab) => (
             <li
@@ -629,48 +632,50 @@ export function JsonWorkspace() {
           </button>
         </div>
 
-        <div className="history-panel">
-          <h2 className="history-heading">History</h2>
-          <p className="history-hint muted">
-            Recently closed tabs are saved here and in your browser. Restore to
-            open them again.
-          </p>
-          {closedHistory.length === 0 ? (
-            <p className="history-empty muted">No closed tabs yet.</p>
-          ) : (
-            <ul className="history-list">
-              {closedHistory.map((snap) => (
-                <li key={snap.id} className="history-item">
-                  <div className="history-item-main">
-                    <span className="history-item-title">
-                      {snap.name || 'Untitled'}
-                    </span>
-                    <span className="history-item-time muted">
-                      {new Date(snap.closedAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="history-item-actions">
-                    <button
-                      type="button"
-                      className="btn primary"
-                      onClick={() => restoreClosed(snap)}
-                    >
-                      Restore
-                    </button>
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      aria-label="Remove from history"
-                      onClick={() => dismissClosed(snap)}
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <details className="history-panel" open>
+          <summary className="history-summary">History</summary>
+          <div className="history-panel-body">
+            <p className="history-hint muted">
+              Recently closed tabs are saved here and in your browser. Restore
+              to open them again.
+            </p>
+            {closedHistory.length === 0 ? (
+              <p className="history-empty muted">No closed tabs yet.</p>
+            ) : (
+              <ul className="history-list">
+                {closedHistory.map((snap) => (
+                  <li key={snap.id} className="history-item">
+                    <div className="history-item-main">
+                      <span className="history-item-title">
+                        {snap.name || 'Untitled'}
+                      </span>
+                      <span className="history-item-time muted">
+                        {new Date(snap.closedAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="history-item-actions">
+                      <button
+                        type="button"
+                        className="btn primary"
+                        onClick={() => restoreClosed(snap)}
+                      >
+                        Restore
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        aria-label="Remove from history"
+                        onClick={() => dismissClosed(snap)}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </details>
       </aside>
 
       <div className="main">

@@ -1,0 +1,86 @@
+# Build the Electron app on macOS, Windows, and Linux.
+#
+# - Push to `master`: build and upload workflow artifacts (no GitHub Release).
+# - Publish a GitHub Release: build and attach installers to that release.
+# - Manual run: same as push (artifacts only).
+#
+# Required repo setting for Release uploads: Settings → Actions → General →
+# Workflow permissions → "Read and write permissions".
+
+name: Electron release
+
+on:
+  push:
+    branches: [master]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: electron-release-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            electron_args: --mac
+          - os: windows-latest
+            electron_args: --win
+          - os: ubuntu-latest
+            electron_args: --linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools rpm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js (standalone) for Electron
+        run: npm run build
+
+      - name: Build & publish Electron to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder ${{ matrix.electron_args }} --publish always
+
+      - name: Build Electron (no publish)
+        if: github.event_name != 'release'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder ${{ matrix.electron_args }} --publish never
+
+      - name: Upload build artifacts
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: json-workspace-electron-${{ matrix.os }}
+          path: dist-electron/
+          if-no-files-found: error
