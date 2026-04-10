@@ -1,6 +1,7 @@
 # Build the Electron app on macOS, Windows, and Linux.
 #
-# - Push to `master`: build and upload workflow artifacts (no GitHub Release).
+# - Push to `master` or `main` — including when a PR is merged into that branch
+#   (GitHub emits a push event for the merge commit). Builds and uploads artifacts.
 # - Publish a GitHub Release: build and attach installers to that release.
 # - Manual run: same as push (artifacts only).
 #
@@ -11,7 +12,7 @@ name: Electron release
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
   release:
     types: [published]
   workflow_dispatch:
