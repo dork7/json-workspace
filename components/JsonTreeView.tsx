@@ -10,6 +10,14 @@ function hasMeaningfulChildValue(v: unknown): boolean {
   return Object.keys(v).length > 0;
 }
 
+export function PlainTreeView({ value }: { value: unknown }) {
+  return (
+    <div className="json-tree" tabIndex={0} aria-label="Collapsible tree">
+      <JsonTreeValue value={value} />
+    </div>
+  );
+}
+
 function JsonTreeValue({ value }: { value: unknown }) {
   if (value !== null && typeof value === 'object') {
     if (Array.isArray(value)) {
@@ -62,9 +70,5 @@ export function JsonTreeView({ text }: { text: string }) {
   if (!p.ok) {
     return <div className="tree-error">Invalid JSON: {p.error}</div>;
   }
-  return (
-    <div className="json-tree" tabIndex={0} aria-label="Collapsible JSON">
-      <JsonTreeValue value={p.value} />
-    </div>
-  );
+  return <PlainTreeView value={p.value} />;
 }

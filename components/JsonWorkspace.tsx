@@ -8,15 +8,15 @@ import {
   useState,
 } from 'react';
 import { JsonTreeView } from '@/components/JsonTreeView';
+import { JsTsTreeView } from '@/components/JsTsTreeView';
 import { collectJsonPaths, getPathValue } from '@/lib/json-path';
 import {
   displayTextForCompare,
-  formatJsonString,
-  minifyJsonString,
-  parseJsonSafe,
   uid,
 } from '@/lib/json-utils';
-import { deriveTabName } from '@/lib/tab-names';
+import { deriveTabLabel } from '@/lib/tab-names';
+import { getTabLang } from '@/lib/tab-lang';
+import { getWatchRoot } from '@/lib/watch-root';
 import {
   CLOSED_TABS_STORAGE_KEY,
   MAX_CLOSED_HISTORY,
@@ -25,7 +25,7 @@ import {
   parseClosedHistory,
   parseWorkspace,
 } from '@/lib/workspace-storage';
-import type { Tab } from '@/lib/workspace-types';
+import type { Tab, TabLanguage } from '@/lib/workspace-types';
 
 const WATCH_STORAGE_KEY = 'json-workspace-watch-v1';
 const WATCH_VALUE_MAX = 4000;
@@ -84,6 +84,7 @@ export function JsonWorkspace() {
   const [findQuery, setFindQuery] = useState('');
   const [findMatchIndex, setFindMatchIndex] = useState(-1);
   const [watchInput, setWatchInput] = useState('');
+  const [busyAction, setBusyAction] = useState<'format' | 'minify' | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -93,15 +94,22 @@ export function JsonWorkspace() {
   activeIdRef.current = activeId;
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
+  const activeLang = useMemo(
+    () => getTabLang(activeTab),
+    [activeTab.text, activeTab.lang, activeTab.langAuto]
+  );
 
-  const parsedActive = useMemo(() => parseJsonSafe(activeTab.text), [activeTab.text]);
+  const watchRoot = useMemo(
+    () => getWatchRoot(activeTab.text, activeLang),
+    [activeTab.text, activeLang]
+  );
 
   const pathSuggestions = useMemo(() => {
-    if (!parsedActive.ok) return [] as string[];
+    if (!watchRoot.ok) return [] as string[];
     const out: string[] = [];
-    collectJsonPaths(parsedActive.value, '', out);
+    collectJsonPaths(watchRoot.value, '', out);
     return [...new Set(out)].sort((a, b) => a.localeCompare(b));
-  }, [parsedActive]);
+  }, [watchRoot]);
 
   const findMatches = useMemo(() => {
     if (!findQuery) return [] as { start: number; end: number }[];
@@ -160,7 +168,7 @@ export function JsonWorkspace() {
       );
       if (w) {
         const tabsFixed = w.tabs.map((t) => {
-          const n = deriveTabName(t.text);
+          const n = deriveTabLabel(t.text, getTabLang(t));
           if (n !== null && t.name !== n) return { ...t, name: n };
           return t;
         });
@@ -189,7 +197,7 @@ export function JsonWorkspace() {
         const idx = prev.findIndex((t) => t.id === id);
         if (idx === -1) return prev;
         const tab = prev[idx];
-        const name = deriveTabName(tab.text);
+        const name = deriveTabLabel(tab.text, getTabLang(tab));
         if (name === null || tab.name === name) return prev;
         const next = [...prev];
         next[idx] = { ...tab, name };
@@ -286,6 +294,9 @@ export function JsonWorkspace() {
         name: closing.name,
         text: closing.text,
         closedAt: Date.now(),
+        ...(closing.langAuto === false
+          ? { langAuto: false as const, lang: closing.lang ?? 'json' }
+          : { langAuto: true as const }),
       };
       return [snap, ...prev].slice(0, MAX_CLOSED_HISTORY);
     });
@@ -299,9 +310,19 @@ export function JsonWorkspace() {
 
   const restoreClosed = (snap: ClosedTabSnapshot) => {
     const newId = uid();
+    const manual =
+      snap.langAuto === false ||
+      (snap.langAuto === undefined && snap.lang !== undefined);
     setTabs((prev) => [
       ...prev,
-      { id: newId, name: snap.name, text: snap.text },
+      {
+        id: newId,
+        name: snap.name,
+        text: snap.text,
+        ...(manual
+          ? { langAuto: false, lang: snap.lang ?? 'json' }
+          : { langAuto: true }),
+      },
     ]);
     setActiveId(newId);
     setClosedHistory((prev) => prev.filter((x) => x.id !== snap.id));
@@ -319,34 +340,81 @@ export function JsonWorkspace() {
     setFindQuery('');
   };
 
-  const onFormat = () => {
-    const out = formatJsonString(activeTab.text);
-    if (out === null) {
-      alert('Invalid JSON — cannot format.');
-      return;
-    }
-    const name = deriveTabName(out);
+  const setLanguageSelect = (value: string) => {
     setTabs((prev) =>
       prev.map((t) => {
         if (t.id !== activeId) return t;
-        return name !== null ? { ...t, text: out, name } : { ...t, text: out };
+        if (value === 'auto') return { ...t, langAuto: true };
+        return { ...t, langAuto: false, lang: value as TabLanguage };
       })
     );
+    scheduleTabNameRefresh();
   };
 
-  const onMinify = () => {
-    const out = minifyJsonString(activeTab.text);
-    if (out === null) {
-      alert('Invalid JSON — cannot minify.');
-      return;
+  const onFormat = async () => {
+    const id = activeId;
+    const lang = getTabLang(activeTab);
+    const text = activeTab.text;
+    setBusyAction('format');
+    try {
+      const res = await fetch('/api/format', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, lang }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        text?: string;
+        error?: string;
+      };
+      if (!data.ok || typeof data.text !== 'string') {
+        alert(data.error ?? 'Cannot format.');
+        return;
+      }
+      const out = data.text;
+      const name = deriveTabLabel(out, lang);
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t;
+          return name !== null ? { ...t, text: out, name } : { ...t, text: out };
+        })
+      );
+    } finally {
+      setBusyAction(null);
     }
-    const name = deriveTabName(out);
-    setTabs((prev) =>
-      prev.map((t) => {
-        if (t.id !== activeId) return t;
-        return name !== null ? { ...t, text: out, name } : { ...t, text: out };
-      })
-    );
+  };
+
+  const onMinify = async () => {
+    const id = activeId;
+    const lang = getTabLang(activeTab);
+    const text = activeTab.text;
+    setBusyAction('minify');
+    try {
+      const res = await fetch('/api/minify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, lang }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        text?: string;
+        error?: string;
+      };
+      if (!data.ok || typeof data.text !== 'string') {
+        alert(data.error ?? 'Cannot minify.');
+        return;
+      }
+      const out = data.text;
+      const name = deriveTabLabel(out, lang);
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t;
+          return name !== null ? { ...t, text: out, name } : { ...t, text: out };
+        })
+      );
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const onCollapseAll = () => {
@@ -393,8 +461,8 @@ export function JsonWorkspace() {
     const tb = tabs.find((t) => t.id === compareBId);
     if (!ta || !tb) return { left: [] as string[], right: [] as string[] };
     return computeDiffLines(
-      displayTextForCompare(ta.text),
-      displayTextForCompare(tb.text)
+      displayTextForCompare(ta.text, getTabLang(ta)),
+      displayTextForCompare(tb.text, getTabLang(tb))
     );
   }, [tabs, compareAId, compareBId]);
 
@@ -421,7 +489,7 @@ export function JsonWorkspace() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-head">
-          <h1 className="sidebar-title">JSON</h1>
+          <h1 className="sidebar-title">Workspace</h1>
           <button type="button" className="btn primary" onClick={newTab}>
             + New tab
           </button>
@@ -463,14 +531,14 @@ export function JsonWorkspace() {
             {watchEntries.map((w) => {
               let display = '';
               let err = false;
-              if (!parsedActive.ok) {
+              if (!watchRoot.ok) {
                 err = true;
                 display =
-                  'error' in parsedActive && parsedActive.error
-                    ? `Invalid JSON: ${parsedActive.error}`
-                    : 'Invalid JSON';
+                  activeLang === 'json'
+                    ? `Invalid JSON: ${watchRoot.error}`
+                    : `Parse error: ${watchRoot.error}`;
               } else {
-                const res = getPathValue(parsedActive.value, w.expr);
+                const res = getPathValue(watchRoot.value, w.expr);
                 if (!res.ok) {
                   err = true;
                   display = res.error ?? 'Path error';
@@ -498,7 +566,7 @@ export function JsonWorkspace() {
           </ul>
         </div>
 
-        <ul className="tab-list" role="tablist" aria-label="Open JSON tabs">
+        <ul className="tab-list" role="tablist" aria-label="Open tabs">
           {tabs.map((tab) => (
             <li
               key={tab.id}
@@ -611,11 +679,48 @@ export function JsonWorkspace() {
           id="main-toolbar"
         >
           <div className="toolbar-actions">
-            <button type="button" className="btn primary" onClick={onFormat}>
-              Format
+            <label className="toolbar-lang-field">
+              <span className="toolbar-label">Language</span>
+              <select
+                className="toolbar-lang-select"
+                value={
+                  activeTab.langAuto !== false ? 'auto' : (activeTab.lang ?? 'json')
+                }
+                onChange={(e) => setLanguageSelect(e.target.value)}
+                aria-label="Document language"
+                title={
+                  activeTab.langAuto !== false
+                    ? `Auto-detected: ${activeLang}`
+                    : 'Fixed language (auto-detect off)'
+                }
+              >
+                <option value="auto">Auto (detect)</option>
+                <option value="json">JSON</option>
+                <option value="javascript">JavaScript</option>
+                <option value="typescript">TypeScript</option>
+              </select>
+              {activeTab.langAuto !== false ? (
+                <span className="toolbar-lang-detected muted" aria-live="polite">
+                  → {activeLang}
+                </span>
+              ) : null}
+            </label>
+            <span className="toolbar-sep" aria-hidden />
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => void onFormat()}
+              disabled={busyAction !== null}
+            >
+              {busyAction === 'format' ? 'Format…' : 'Format'}
             </button>
-            <button type="button" className="btn" onClick={onMinify}>
-              Minify
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void onMinify()}
+              disabled={busyAction !== null}
+            >
+              {busyAction === 'minify' ? 'Minify…' : 'Minify'}
             </button>
             <span className="toolbar-sep" aria-hidden />
             <span className="toolbar-label">View</span>
@@ -690,7 +795,7 @@ export function JsonWorkspace() {
 
         <section
           className={`editor-section${compareOpen ? ' hidden' : ''}`}
-          aria-label="JSON editor"
+          aria-label="Editor"
         >
           <div
             className={`editor-pane text-pane${editView === 'tree' ? ' hidden' : ''}`}
@@ -699,7 +804,13 @@ export function JsonWorkspace() {
               ref={textareaRef}
               className="json-textarea"
               spellCheck={false}
-              placeholder="Paste JSON here. Switch to Tree for a collapsible view. Tabs on the left switch documents."
+              placeholder={
+                activeLang === 'json'
+                  ? 'Paste JSON here. Tree, Watch, and Format need valid JSON.'
+                  : activeLang === 'typescript'
+                    ? 'Paste TypeScript here. Tree and Watch use the parsed AST (paths like program.body[0]).'
+                    : 'Paste JavaScript here. Tree and Watch use the parsed AST (paths like program.body[0]).'
+              }
               value={activeTab.text}
               onChange={onTextInput}
               onKeyDown={onTextKeyDown}
@@ -710,7 +821,11 @@ export function JsonWorkspace() {
             id="tree-pane"
           >
             <div ref={treeRef} id="json-tree-root">
-              <JsonTreeView text={activeTab.text} />
+              {activeLang === 'json' ? (
+                <JsonTreeView text={activeTab.text} />
+              ) : (
+                <JsTsTreeView text={activeTab.text} lang={activeLang} />
+              )}
             </div>
           </div>
         </section>

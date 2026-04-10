@@ -1,6 +1,6 @@
 # json-workspace
 
-Multi-tab JSON editor with **Text** / **Tree** views, **Watch** path expressions (with suggestions), **Find**, and **Compare** (line-aligned diff). Built with **Next.js** (App Router) and React.
+Multi-tab editor for **JSON** (and any **text or code** you want to keep in a tab). **Text** / **Tree** views, **Watch** path expressions (with suggestions), **Find**, and **Compare** (line-aligned diff). Tree, watch, and format/minify need valid JSON; other content still saves and compares as text. Built with **Next.js** (App Router) and React.
 
 **Setup, prerequisites, and how to run locally:** see **[SETUP.md](./SETUP.md)**.
 
@@ -10,6 +10,13 @@ Multi-tab JSON editor with **Text** / **Tree** views, **Watch** path expressions
 |-------------|-----|
 | **Local development** | After `npm run dev` (or `yarn dev`), open **[http://localhost:3000](http://localhost:3000)** in your browser. |
 | **Production (live)** | **[https://json-workspace.vercel.app/](https://json-workspace.vercel.app/)** |
+
+You can also copy the URLs as plain text:
+
+```text
+http://localhost:3000
+https://json-workspace.vercel.app/
+```
 
 ## Scripts
 

@@ -1,4 +1,4 @@
-import type { Tab } from '@/lib/workspace-types';
+import type { Tab, TabLanguage } from '@/lib/workspace-types';
 
 /** Tabs + active tab — survives refresh */
 export const WORKSPACE_STORAGE_KEY = 'json-workspace-workspace-v1';
@@ -11,6 +11,8 @@ export type ClosedTabSnapshot = {
   name: string;
   text: string;
   closedAt: number;
+  lang?: TabLanguage;
+  langAuto?: boolean;
 };
 
 export type PersistedWorkspace = {
@@ -33,10 +35,24 @@ export function parseWorkspace(raw: string | null): PersistedWorkspace | null {
       const text = (t as { text?: unknown }).text;
       if (typeof id !== 'string' || typeof text !== 'string') continue;
       const name = (t as { name?: unknown }).name;
+      const langRaw = (t as { lang?: unknown }).lang;
+      const lang: TabLanguage | undefined =
+        langRaw === 'json' || langRaw === 'javascript' || langRaw === 'typescript'
+          ? langRaw
+          : undefined;
+      const langAutoRaw = (t as { langAuto?: unknown }).langAuto;
+      const langAuto: boolean | undefined =
+        typeof langAutoRaw === 'boolean'
+          ? langAutoRaw
+          : lang !== undefined
+            ? false
+            : undefined;
       parsed.push({
         id,
         text,
         name: typeof name === 'string' ? name : '',
+        ...(lang ? { lang } : {}),
+        ...(langAuto !== undefined ? { langAuto } : {}),
       });
     }
     if (parsed.length === 0) return null;
@@ -60,11 +76,21 @@ export function parseClosedHistory(raw: string | null): ClosedTabSnapshot[] {
       if (typeof text !== 'string' || typeof closedAt !== 'number') continue;
       const name = (item as { name?: unknown }).name;
       const sid = (item as { id?: unknown }).id;
+      const langRaw = (item as { lang?: unknown }).lang;
+      const lang: TabLanguage | undefined =
+        langRaw === 'json' || langRaw === 'javascript' || langRaw === 'typescript'
+          ? langRaw
+          : undefined;
+      const langAutoRaw = (item as { langAuto?: unknown }).langAuto;
+      const langAuto =
+        typeof langAutoRaw === 'boolean' ? langAutoRaw : undefined;
       out.push({
         id: typeof sid === 'string' ? sid : `legacy-${closedAt}-${out.length}`,
         text,
         closedAt,
         name: typeof name === 'string' ? name : '',
+        ...(lang ? { lang } : {}),
+        ...(langAuto !== undefined ? { langAuto } : {}),
       });
     }
     return out.slice(0, MAX_CLOSED_HISTORY);

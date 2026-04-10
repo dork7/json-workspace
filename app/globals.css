@@ -368,6 +368,27 @@ body {
   color: var(--muted);
 }
 
+.toolbar-lang-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.toolbar-lang-select {
+  font-size: 13px;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.toolbar-lang-detected {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .toggle {
   display: inline-flex;
   align-items: center;

@@ -1,3 +1,5 @@
+import type { TabLanguage } from '@/lib/workspace-types';
+
 export function uid(): string {
   return crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -22,7 +24,13 @@ export function minifyJsonString(text: string): string | null {
   return JSON.stringify(p.value);
 }
 
-export function displayTextForCompare(text: string): string {
-  const f = formatJsonString(text);
-  return f !== null ? f : text;
+export function displayTextForCompare(
+  text: string,
+  lang: TabLanguage = 'json'
+): string {
+  if (lang === 'json') {
+    const f = formatJsonString(text);
+    return f !== null ? f : text;
+  }
+  return text;
 }
