@@ -61,6 +61,31 @@ If port **3000** is busy, Next.js will suggest another port, or you can run:
 npx next dev -p 3001
 ```
 
+### Desktop app (Electron)
+
+Run the same app in a **native window** instead of a separate browser tab.
+
+**Development** — Next.js dev server plus Electron (port **3000**):
+
+```bash
+npm run electron:dev
+```
+
+**Production** — uses the Next.js **standalone** server bundled with the app (API routes work). After building, Electron starts a server on port **3050** and opens it:
+
+```bash
+npm run build
+npm run electron
+```
+
+**Packaged installers** (output in `dist-electron/`):
+
+```bash
+npm run electron:pack
+```
+
+The production server is started with the Electron binary in Node mode (`ELECTRON_RUN_AS_NODE`), so end users do **not** need a separate Node.js install for the packaged app.
+
 ## 4. Production build and run
 
 Build an optimized production bundle:

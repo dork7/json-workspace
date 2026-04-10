@@ -2,11 +2,17 @@
   "name": "json-workspace",
   "version": "1.0.0",
   "private": true,
+  "description": "JSON / JavaScript / TypeScript workspace editor (Next.js + optional Electron shell)",
+  "author": "",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build",
+    "build": "next build && node scripts/copy-standalone-assets.js",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "electron": "electron .",
+    "electron:dev": "concurrently -k \"cross-env BROWSER=none next dev --turbopack\" \"wait-on http://127.0.0.1:3000 && cross-env ELECTRON_DEV=1 electron .\"",
+    "electron:pack": "npm run build && electron-builder"
   },
   "dependencies": {
     "@babel/parser": "^7.26.0",
@@ -20,11 +26,53 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8",
     "eslint": "^9.16.0",
     "eslint-config-next": "^15.1.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "wait-on": "^8.0.1"
   },
   "engines": {
     "node": ">=20.x"
+  },
+  "build": {
+    "appId": "dev.jsonworkspace.app",
+    "productName": "JSON Workspace",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": "standalone"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
   }
 }
