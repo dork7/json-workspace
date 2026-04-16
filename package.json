@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "description": "JSON / JavaScript / TypeScript workspace editor (Next.js + optional Electron shell)",
-  "author": "",
+  "author": {
+    "name": "JSON Workspace",
+    "email": "hamzameh122@gmail.com"
+  },
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev --turbopack",
@@ -72,7 +75,8 @@
         "AppImage",
         "deb"
       ],
-      "category": "Development"
+      "category": "Development",
+      "maintainer": "JSON Workspace <json-workspace@users.noreply.github.com>"
     },
     "publish": {
       "provider": "github"
