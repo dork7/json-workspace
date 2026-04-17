@@ -35,6 +35,13 @@
     ajv "^6.12.0"
     ajv-keywords "^3.4.1"
 
+"@dork7/filehasher@^1.0.0":
+  version "1.0.0"
+  resolved "https://registry.npmjs.org/@dork7/filehasher/-/filehasher-1.0.0.tgz"
+  integrity sha512-JOUplXg3lLDqv0pO2JzRkQMccIELI49ApN93XPPQpHtaG/P9dB8XedFb9F5hbEa/qLIclIiy/RiG9SXyfEFtWQ==
+  dependencies:
+    commander "^13.1.0"
+
 "@electron/asar@^3.2.7":
   version "3.4.1"
   resolved "https://registry.npmjs.org/@electron/asar/-/asar-3.4.1.tgz"
@@ -1271,6 +1278,11 @@ combined-stream@^1.0.8:
   integrity sha512-FQN4MRfuJeHf7cBbBMJFXhKSDq+2kAArBlmRBvcvFE5BB1HZKXtSFASDhdlz9zOYwxh8lDdnvmMOe/+5cdoEdg==
   dependencies:
     delayed-stream "~1.0.0"
+
+commander@^13.1.0:
+  version "13.1.0"
+  resolved "https://registry.npmjs.org/commander/-/commander-13.1.0.tgz"
+  integrity sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw==
 
 commander@^5.0.0:
   version "5.1.0"
