@@ -1,7 +1,19 @@
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const net = require('net');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
+
+/**
+ * Production runs the Next.js standalone server in a **separate child process** (required).
+ * That is the second thing you see in Task Manager / Activity Monitor.
+ *
+ * Prefer the real `node` binary when it is on PATH so that process shows as **node** running
+ * `server.js`. If `node` is not found (e.g. some packaged installs), we fall back to
+ * `Electron` with `ELECTRON_RUN_AS_NODE=1`, which can look like a second Electron process.
+ *
+ * Override with env `NODE_BINARY=/full/path/to/node` if needed.
+ */
 
 const DEV_URL = process.env.ELECTRON_DEV_URL || 'http://127.0.0.1:3000';
 /** Production server port (avoid clashing with `next dev` on 3000). */
@@ -13,6 +25,7 @@ const isDevOnly =
 
 let mainWindow = null;
 let serverProcess = null;
+let isShuttingDown = false;
 
 function isPackaged() {
   return app.isPackaged;
@@ -23,6 +36,26 @@ function standaloneRoot() {
     return path.join(process.resourcesPath, 'standalone');
   }
   return path.join(__dirname, '..', '.next', 'standalone');
+}
+
+function resolveNodeBinary() {
+  if (process.env.NODE_BINARY) {
+    const p = process.env.NODE_BINARY;
+    if (fs.existsSync(p)) return p;
+  }
+  try {
+    const cmd =
+      process.platform === 'win32' ? 'where.exe node' : 'command -v node';
+    const out = execSync(cmd, {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const first = out.split(/\r?\n/).find((line) => line.trim());
+    if (first && fs.existsSync(first)) return first;
+  } catch {
+    /* no node on PATH */
+  }
+  return null;
 }
 
 function waitForPort(port, host = '127.0.0.1', timeoutMs = 60000) {
@@ -49,7 +82,6 @@ function waitForPort(port, host = '127.0.0.1', timeoutMs = 60000) {
 function startNextStandalone() {
   const root = standaloneRoot();
   const serverJs = path.join(root, 'server.js');
-  const fs = require('fs');
   if (!fs.existsSync(serverJs)) {
     return Promise.reject(
       new Error(
@@ -58,18 +90,23 @@ function startNextStandalone() {
     );
   }
 
+  const nodeBin = resolveNodeBinary();
   const env = {
     ...process.env,
     NODE_ENV: 'production',
     PORT: String(PROD_PORT),
     HOSTNAME: '127.0.0.1',
-    ELECTRON_RUN_AS_NODE: '1',
   };
+  if (!nodeBin) {
+    env.ELECTRON_RUN_AS_NODE = '1';
+  }
 
-  serverProcess = spawn(process.execPath, ['server.js'], {
+  const command = nodeBin || process.execPath;
+  serverProcess = spawn(command, ['server.js'], {
     cwd: root,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   });
 
   serverProcess.on('error', (err) => {
@@ -92,46 +129,116 @@ function stopNextStandalone() {
   }
 }
 
-function createWindow(loadUrl) {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 640,
-    minHeight: 480,
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
+/** Stops embedded server; swallows errors so shutdown can continue. */
+function safeStopServer() {
+  try {
+    stopNextStandalone();
+  } catch (e) {
+    console.error('[electron] error while stopping server', e);
+  }
+}
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.maximize();
-    mainWindow.show();
-  });
+/**
+ * Shows an error (if possible), stops the server, and quits the app once.
+ */
+function quitGracefully(title, err) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
 
-  mainWindow.loadURL(loadUrl);
+  const detail =
+    err instanceof Error ? err.message : err != null ? String(err) : '';
+  console.error(`[electron] ${title}`, err ?? detail);
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: 'deny' };
-  });
+  safeStopServer();
 
-  mainWindow.on('closed', () => {
+  try {
+    const { dialog } = require('electron');
+    if (app.isReady() && detail) {
+      dialog.showErrorBox(title, detail);
+    }
+  } catch (dialogErr) {
+    console.error('[electron] could not show error dialog', dialogErr);
+  }
+
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
+    }
     mainWindow = null;
-  });
+  } catch (e) {
+    console.error('[electron] error destroying window', e);
+  }
+
+  try {
+    app.quit();
+  } catch (e) {
+    console.error('[electron] app.quit failed', e);
+    process.exit(1);
+  }
+}
+
+function createWindow(loadUrl) {
+  try {
+    mainWindow = new BrowserWindow({
+      width: 1280,
+      height: 840,
+      minWidth: 640,
+      minHeight: 480,
+      show: false,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+      },
+    });
+
+    mainWindow.once('ready-to-show', () => {
+      try {
+        mainWindow.maximize();
+        mainWindow.show();
+      } catch (e) {
+        quitGracefully('JSON Workspace', e);
+      }
+    });
+
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      shell.openExternal(url);
+      return { action: 'deny' };
+    });
+
+    mainWindow.on('closed', () => {
+      mainWindow = null;
+    });
+
+    mainWindow.loadURL(loadUrl).catch((loadErr) => {
+      quitGracefully('Failed to load app', loadErr);
+    });
+  } catch (e) {
+    quitGracefully('Could not create window', e);
+  }
 }
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
+  process.on('uncaughtException', (error) => {
+    quitGracefully('Unexpected error', error);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    console.error('[electron] unhandledRejection', reason);
+  });
+
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+    try {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+      }
+    } catch (e) {
+      console.error('[electron] second-instance', e);
     }
   });
 
@@ -145,24 +252,27 @@ if (!gotLock) {
       }
       createWindow(url);
     } catch (e) {
-      console.error(e);
-      const { dialog } = require('electron');
-      dialog.showErrorBox(
-        'JSON Workspace',
-        e instanceof Error ? e.message : String(e)
-      );
-      app.quit();
+      quitGracefully('JSON Workspace', e);
     }
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
+    try {
+      if (process.platform !== 'darwin') {
+        app.quit();
+      }
+    } catch (e) {
+      console.error('[electron] window-all-closed', e);
+      process.exit(1);
     }
   });
 
   app.on('before-quit', () => {
-    stopNextStandalone();
+    try {
+      safeStopServer();
+    } catch (e) {
+      console.error('[electron] before-quit', e);
+    }
   });
 
   app.on('activate', async () => {
@@ -174,7 +284,7 @@ if (!gotLock) {
         }
         createWindow(url);
       } catch (e) {
-        console.error(e);
+        quitGracefully('JSON Workspace', e);
       }
     }
   });
