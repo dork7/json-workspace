@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { SonnerToaster } from '@/components/SonnerToaster';
 
 export const metadata: Metadata = {
   title: 'Watchfox',
@@ -14,7 +15,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <SonnerToaster />
+      </body>
     </html>
   );
 }

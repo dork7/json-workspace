@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { flushSync } from 'react-dom';
 import {
   lineSnippet,
   lineStartOffset,
@@ -39,6 +40,7 @@ import {
   sliceDocLineAt,
 } from '@/lib/watch-extract-from-editor';
 import type { Tab, TabLanguage } from '@/lib/workspace-types';
+import { toast } from 'sonner';
 
 const WorkspaceEditor = dynamic(
   () => import('@/components/WorkspaceEditor'),
@@ -502,7 +504,7 @@ export function JsonWorkspace() {
         error?: string;
       };
       if (!data.ok || typeof data.text !== 'string') {
-        alert(data.error ?? 'Cannot format.');
+        toast.error(data.error ?? 'Cannot format.');
         return;
       }
       const out = data.text;
@@ -513,6 +515,8 @@ export function JsonWorkspace() {
           return name !== null ? { ...t, text: out, name } : { ...t, text: out };
         })
       );
+    } catch {
+      toast.error('Format request failed. Check your connection and try again.');
     } finally {
       setBusyAction(null);
     }
@@ -535,7 +539,7 @@ export function JsonWorkspace() {
         error?: string;
       };
       if (!data.ok || typeof data.text !== 'string') {
-        alert(data.error ?? 'Cannot minify.');
+        toast.error(data.error ?? 'Cannot minify.');
         return;
       }
       const out = data.text;
@@ -546,6 +550,8 @@ export function JsonWorkspace() {
           return name !== null ? { ...t, text: out, name } : { ...t, text: out };
         })
       );
+    } catch {
+      toast.error('Minify request failed. Check your connection and try again.');
     } finally {
       setBusyAction(null);
     }
@@ -582,19 +588,21 @@ export function JsonWorkspace() {
         col >= 0 ? col : 0
       );
       if (!expr) {
-        alert(
+        toast.error(
           'Could not infer a watch path from this line. Try a line with a JSON key, const/function/class name, or identifier.'
         );
         return;
       }
       let added = false;
-      setWatchEntries((w) => {
-        if (w.some((x) => x.expr === expr)) return w;
-        added = true;
-        return [...w, { id: uid(), expr }];
+      flushSync(() => {
+        setWatchEntries((w) => {
+          if (w.some((x) => x.expr === expr)) return w;
+          added = true;
+          return [...w, { id: uid(), expr }];
+        });
       });
       if (!added) {
-        alert(`Watch already lists "${expr}".`);
+        toast.error(`Watch already lists "${expr}".`);
         return;
       }
       setWatchInput('');
@@ -606,6 +614,10 @@ export function JsonWorkspace() {
   const removeWatch = (id: string) => {
     setWatchEntries((w) => w.filter((x) => x.id !== id));
   };
+
+  const clearAllWatches = useCallback(() => {
+    setWatchEntries([]);
+  }, []);
 
   const findNext = (delta: number) => {
     const n = findMatches.length;
@@ -702,7 +714,18 @@ export function JsonWorkspace() {
         </div>
 
         <div className="watch-panel">
-          <h2 className="watch-heading">Watch</h2>
+          <div className="watch-panel-head">
+            <h2 className="watch-heading">Watch</h2>
+            <button
+              type="button"
+              className="btn ghost watch-clear-all"
+              disabled={watchEntries.length === 0}
+              title="Remove all watch expressions"
+              onClick={clearAllWatches}
+            >
+              Clear all
+            </button>
+          </div>
           <p className="watch-hint">
             Paths from root, e.g. <code>user</code>, <code>items[0]</code>,{' '}
             <code>["key-name"]</code>. Choosing a suggestion adds it to the list.
