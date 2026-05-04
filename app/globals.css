@@ -165,6 +165,31 @@ body > * {
   font-weight: 600;
 }
 
+.electron-git-update {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: auto;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+
+.electron-git-update-btn {
+  width: 100%;
+}
+
+.electron-git-update-hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.electron-git-update-hint code {
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
 .tab-list {
   list-style: none;
   margin: 0;

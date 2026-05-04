@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -22,6 +22,94 @@ let embeddedNextRunning = false;
 let mainWindow = null;
 let serverProcess = null;
 let isShuttingDown = false;
+
+function findGitRepoRoot() {
+  const fromScript = path.resolve(__dirname, '..');
+  if (fs.existsSync(path.join(fromScript, '.git'))) {
+    return fromScript;
+  }
+  if (process.env.WATCHFOX_GIT_ROOT) {
+    const r = path.resolve(process.env.WATCHFOX_GIT_ROOT);
+    if (fs.existsSync(path.join(r, '.git'))) return r;
+  }
+  return null;
+}
+
+function gitPullOriginBranch(repoRoot, branch) {
+  return new Promise((resolve) => {
+    const child = spawn('git', ['pull', 'origin', branch], {
+      cwd: repoRoot,
+      env: process.env,
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d) => {
+      stdout += d.toString();
+    });
+    child.stderr?.on('data', (d) => {
+      stderr += d.toString();
+    });
+    child.on('error', (err) => {
+      resolve({
+        ok: false,
+        code: null,
+        stdout,
+        stderr: `${stderr}\n${err.message}`.trim(),
+        error: err.message,
+      });
+    });
+    child.on('close', (code) => {
+      resolve({
+        ok: code === 0,
+        code,
+        stdout: stdout.trimEnd(),
+        stderr: stderr.trimEnd(),
+      });
+    });
+  });
+}
+
+function registerGitIpc() {
+  ipcMain.handle('watchfox:git-update-capable', () => {
+    const root = findGitRepoRoot();
+    return { capable: Boolean(root), repoRoot: root || undefined };
+  });
+
+  ipcMain.handle('watchfox:pull-github-master', async () => {
+    const repoRoot = findGitRepoRoot();
+    if (!repoRoot) {
+      return {
+        ok: false,
+        error:
+          'No git repository found. Updates from GitHub only work when Watchfox is run from a source clone (not the packaged app). Set WATCHFOX_GIT_ROOT if your repo lives elsewhere.',
+      };
+    }
+
+    let result = await gitPullOriginBranch(repoRoot, 'master');
+    const combined = `${result.stdout}\n${result.stderr}`;
+    if (
+      !result.ok &&
+      /Could not find remote ref|no such ref|fatal: couldn't find remote ref/i.test(
+        combined
+      )
+    ) {
+      result = await gitPullOriginBranch(repoRoot, 'main');
+    }
+
+    if (!result.ok && !result.error) {
+      result.error =
+        result.stderr ||
+        (result.code != null ? `git exited with code ${result.code}` : 'git failed');
+    }
+    return result;
+  });
+
+  ipcMain.handle('watchfox:relaunch', () => {
+    app.relaunch();
+    app.exit(0);
+  });
+}
 
 function isPackaged() {
   return app.isPackaged;
@@ -307,6 +395,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     try {
+      registerGitIpc();
       let url;
       if (isDevOnly) {
         url = DEV_URL;
