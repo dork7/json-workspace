@@ -5,23 +5,19 @@ const net = require('net');
 const { spawn, execSync } = require('child_process');
 
 /**
- * Production runs the Next.js standalone server in a **separate child process** (required).
- * That is the second thing you see in Task Manager / Activity Monitor.
- *
- * Prefer the real `node` binary when it is on PATH so that process shows as **node** running
- * `server.js`. If `node` is not found (e.g. some packaged installs), we fall back to
- * `Electron` with `ELECTRON_RUN_AS_NODE=1`, which can look like a second Electron process.
- *
- * Override with env `NODE_BINARY=/full/path/to/node` if needed.
+ * Production: Next.js standalone runs **in the Electron main process** (one OS process).
+ * If that fails, we fall back to a child process (two processes — e.g. real `node` or
+ * Electron with ELECTRON_RUN_AS_NODE).
  */
 
 const DEV_URL = process.env.ELECTRON_DEV_URL || 'http://127.0.0.1:3000';
-/** Production server port (avoid clashing with `next dev` on 3000). */
 const PROD_PORT = 3050;
 
-/** Dev: next dev is started by npm script; Electron only loads the URL. */
 const isDevOnly =
   process.env.ELECTRON_DEV === '1' || process.env.ELECTRON_DEV === 'true';
+
+/** True when Next was started via require() in this process (no child). */
+let embeddedNextRunning = false;
 
 let mainWindow = null;
 let serverProcess = null;
@@ -79,7 +75,62 @@ function waitForPort(port, host = '127.0.0.1', timeoutMs = 60000) {
   });
 }
 
-function startNextStandalone() {
+/**
+ * Run Next standalone inside this process so Task Manager shows a single app.
+ */
+async function startNextStandaloneEmbedded() {
+  const root = standaloneRoot();
+  const serverJs = path.join(root, 'server.js');
+  if (!fs.existsSync(serverJs)) {
+    throw new Error(
+      `Missing server at ${serverJs}. Run \`npm run build\` (copies static assets into standalone).`
+    );
+  }
+
+  process.env.NEXT_MANUAL_SIG_HANDLE = '1';
+  process.env.NODE_ENV = 'production';
+  process.env.PORT = String(PROD_PORT);
+  process.env.HOSTNAME = '127.0.0.1';
+
+  const prevCwd = process.cwd();
+  const origExit = process.exit.bind(process);
+  /** Map exit(1) from Next startup failures to a thrown error (async catch paths). */
+  process.exit = (code) => {
+    if (code === 1) {
+      throw new Error('Next.js server failed to start');
+    }
+    return origExit(code);
+  };
+
+  try {
+    process.chdir(root);
+    delete require.cache[require.resolve(serverJs)];
+    require(serverJs);
+  } catch (e) {
+    process.chdir(prevCwd);
+    process.exit = origExit;
+    throw e;
+  }
+
+  try {
+    await waitForPort(PROD_PORT);
+  } catch (e) {
+    process.chdir(prevCwd);
+    process.exit = origExit;
+    throw e;
+  }
+
+  embeddedNextRunning = true;
+  try {
+    process.title = app.getName() || 'Watchfox';
+  } catch {
+    process.title = 'Watchfox';
+  }
+
+  return `http://127.0.0.1:${PROD_PORT}`;
+}
+
+function startNextStandaloneChild() {
   const root = standaloneRoot();
   const serverJs = path.join(root, 'server.js');
   if (!fs.existsSync(serverJs)) {
@@ -107,6 +158,7 @@ function startNextStandalone() {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    argv0: `${app.getName() || 'Watchfox'} (server)`,
   });
 
   serverProcess.on('error', (err) => {
@@ -122,6 +174,21 @@ function startNextStandalone() {
   return waitForPort(PROD_PORT).then(() => `http://127.0.0.1:${PROD_PORT}`);
 }
 
+async function startNextStandalone() {
+  if (process.env.ELECTRON_NEXT_CHILD_ONLY === '1') {
+    return startNextStandaloneChild();
+  }
+  try {
+    return await startNextStandaloneEmbedded();
+  } catch (e) {
+    console.error(
+      '[electron] embedded Next server failed; using child process',
+      e
+    );
+    return startNextStandaloneChild();
+  }
+}
+
 function stopNextStandalone() {
   if (serverProcess && !serverProcess.killed) {
     serverProcess.kill('SIGTERM');
@@ -129,7 +196,6 @@ function stopNextStandalone() {
   }
 }
 
-/** Stops embedded server; swallows errors so shutdown can continue. */
 function safeStopServer() {
   try {
     stopNextStandalone();
@@ -138,9 +204,6 @@ function safeStopServer() {
   }
 }
 
-/**
- * Shows an error (if possible), stops the server, and quits the app once.
- */
 function quitGracefully(title, err) {
   if (isShuttingDown) return;
   isShuttingDown = true;
@@ -198,7 +261,7 @@ function createWindow(loadUrl) {
         mainWindow.maximize();
         mainWindow.show();
       } catch (e) {
-        quitGracefully('JSON Workspace', e);
+        quitGracefully('Watchfox', e);
       }
     });
 
@@ -252,7 +315,7 @@ if (!gotLock) {
       }
       createWindow(url);
     } catch (e) {
-      quitGracefully('JSON Workspace', e);
+      quitGracefully('Watchfox', e);
     }
   });
 
@@ -279,12 +342,16 @@ if (!gotLock) {
     if (BrowserWindow.getAllWindows().length === 0) {
       try {
         let url = isDevOnly ? DEV_URL : `http://127.0.0.1:${PROD_PORT}`;
-        if (!isDevOnly && !serverProcess) {
+        if (
+          !isDevOnly &&
+          !embeddedNextRunning &&
+          !serverProcess
+        ) {
           url = await startNextStandalone();
         }
         createWindow(url);
       } catch (e) {
-        quitGracefully('JSON Workspace', e);
+        quitGracefully('Watchfox', e);
       }
     }
   });

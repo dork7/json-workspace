@@ -24,10 +24,10 @@ node -v   # should print v20.x.x
 Clone the repository (or download and extract it), then go into the project folder:
 
 ```bash
-cd json-workspace
+cd watchfox
 ```
 
-(Use your actual folder name if it differs.)
+(Use your actual clone folder name if it differs — e.g. `web-debugger`.)
 
 ## 2. Install dependencies
 

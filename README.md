@@ -1,6 +1,6 @@
-# json-workspace
+# Watchfox
 
-Multi-tab editor for **JSON** (and any **text or code** you want to keep in a tab). **Text** / **Tree** views, **Watch** path expressions (with suggestions), **Find**, and **Compare** (line-aligned diff). Tree, watch, and format/minify need valid JSON; other content still saves and compares as text. Built with **Next.js** (App Router) and React.
+Multi-tab editor for **JSON** (and any **text or code** you want to keep in a tab). **Text** / **Tree** views, **Watch** path expressions (with suggestions), **Find**, **Bookmarks**, and **Compare** (line-aligned diff). Tree, watch, and format/minify need valid JSON; other content still saves and compares as text. Built with **Next.js** (App Router) and React.
 
 **Setup, prerequisites, and how to run locally:** see **[SETUP.md](./SETUP.md)**.
 
@@ -9,7 +9,7 @@ Multi-tab editor for **JSON** (and any **text or code** you want to keep in a ta
 | Environment | URL |
 |-------------|-----|
 | **Local development** | After `npm run dev` (or `yarn dev`), open **[http://localhost:3000](http://localhost:3000)** in your browser. |
-| **Production (live)** | **[https://json-workspace.vercel.app/](https://json-workspace.vercel.app/)** |
+| **Production (live)** | **[https://json-workspace.vercel.app/](https://json-workspace.vercel.app/)** (deployment name may still match the previous project) |
 
 You can also copy the URLs as plain text:
 
@@ -43,6 +43,6 @@ CLI: `npm i -g vercel` then `vercel` from the project root (links the project an
 
 ## Data on this device
 
-- **Tabs** (content + names + which tab is active) are saved to `localStorage` under `json-workspace-workspace-v1` and restored after refresh.
-- **Watch** expressions use `json-workspace-watch-v1`.
-- **Closed tabs history** (restore / dismiss) uses `json-workspace-closed-tabs-v1`. Nothing is sent to a server; clearing site data removes it.
+- **Tabs** (content + names + which tab is active) are saved to `localStorage` under `watchfox-workspace-v1` and restored after refresh. Data under the older `json-workspace-workspace-v1` key is migrated once on load.
+- **Watch** expressions use `watchfox-watch-v1` (migrated from `json-workspace-watch-v1`).
+- **Closed tabs history** (restore / dismiss) uses `watchfox-closed-tabs-v1` (migrated from `json-workspace-closed-tabs-v1`). Nothing is sent to a server; clearing site data removes it.

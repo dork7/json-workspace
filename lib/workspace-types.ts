@@ -1,5 +1,11 @@
 export type TabLanguage = 'json' | 'javascript' | 'typescript';
 
+/** Bookmark anchored at UTF-16 offset of the first character of a line */
+export type EditorBookmark = {
+  id: string;
+  anchor: number;
+};
+
 export type Tab = {
   id: string;
   name: string;
@@ -11,4 +17,6 @@ export type Tab = {
    * Omitted or `true` = auto-detect (default). `false` = use `lang` only.
    */
   langAuto?: boolean;
+  /** Lines bookmarked in the text editor (per tab). */
+  bookmarks?: EditorBookmark[];
 };
