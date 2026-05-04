@@ -32,13 +32,86 @@ body {
   font-size: 14px;
 }
 
+.sidebar-resizer {
+  display: none;
+}
+
+.sidebar-resizer-grip {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--border);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+body.is-resizing-sidebar {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .app {
   height: 100%;
   max-height: 100%;
   display: grid;
-  grid-template-columns: minmax(240px, 320px) 1fr;
+  grid-template-columns: 1fr;
   overflow: hidden;
   min-height: 0;
+}
+
+@media (min-width: 901px) {
+  .app {
+    grid-template-columns: var(--app-sidebar-width, 280px) 6px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .sidebar-resizer {
+    display: block;
+    grid-column: 2;
+    grid-row: 1;
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .sidebar-resizer:focus {
+    outline: none;
+  }
+
+  .sidebar-resizer:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+
+  .sidebar-resizer:hover .sidebar-resizer-grip,
+  .sidebar-resizer:focus-visible .sidebar-resizer-grip {
+    background: var(--accent);
+    opacity: 0.55;
+  }
+
+  .main {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0;
+  }
 }
 
 body > * {
@@ -492,6 +565,7 @@ body > * {
   align-items: flex-end;
   gap: 0.5rem;
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 .search-field {
@@ -499,6 +573,7 @@ body > * {
   flex-direction: column;
   gap: 0.25rem;
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 .search-field input {
@@ -508,8 +583,10 @@ body > * {
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  width: 200px;
-  max-width: 35vw;
+  box-sizing: border-box;
+  width: 260px;
+  min-width: 260px;
+  max-width: 260px;
 }
 
 .btn {
@@ -854,11 +931,16 @@ body > * {
     grid-template-columns: 1fr;
   }
   .sidebar {
+    grid-column: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
     max-height: 45vh;
   }
   .compare-split {
     grid-template-columns: 1fr;
+  }
+
+  .main {
+    grid-column: auto;
   }
 }

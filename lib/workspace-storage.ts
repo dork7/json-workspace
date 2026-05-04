@@ -5,6 +5,8 @@ export const WORKSPACE_STORAGE_KEY = 'watchfox-workspace-v1';
 export const CLOSED_TABS_STORAGE_KEY = 'watchfox-closed-tabs-v1';
 /** Watch expressions panel */
 export const WATCH_STORAGE_KEY = 'watchfox-watch-v1';
+/** Sidebar width in px (desktop layout only) */
+export const SIDEBAR_WIDTH_STORAGE_KEY = 'watchfox-sidebar-width-v1';
 
 const LEGACY_KEYS = {
   workspace: 'json-workspace-workspace-v1',
