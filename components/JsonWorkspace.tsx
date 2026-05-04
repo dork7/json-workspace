@@ -28,6 +28,7 @@ import { getWatchRoot } from '@/lib/watch-root';
 import {
   CLOSED_TABS_STORAGE_KEY,
   MAX_CLOSED_HISTORY,
+  SIDEBAR_WIDTH_STORAGE_KEY,
   WORKSPACE_STORAGE_KEY,
   WATCH_STORAGE_KEY,
   migrateWorkspaceStorageKeys,
@@ -50,6 +51,28 @@ const WorkspaceEditor = dynamic(
 const WATCH_VALUE_MAX = 4000;
 
 type WatchEntry = { id: string; expr: string };
+
+type GitPullResult = {
+  ok: boolean;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  code?: number | null;
+};
+
+declare global {
+  interface Window {
+    electron?: {
+      platform: string;
+      gitUpdateCapable?: () => Promise<{
+        capable: boolean;
+        repoRoot?: string;
+      }>;
+      pullFromGithubMaster?: () => Promise<GitPullResult>;
+      relaunchApp?: () => Promise<void>;
+    };
+  }
+}
 
 function formatWatchDisplay(v: unknown): string {
   if (v === undefined) return '(undefined)';
@@ -88,6 +111,18 @@ function computeDiffLines(aText: string, bText: string): { left: string[]; right
   return { left, right };
 }
 
+const SIDEBAR_WIDTH_DEFAULT = 280;
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MIN_MAIN = 320;
+const SIDEBAR_CAP = 720;
+
+function clampSidebarWidth(px: number, viewportW: number): number {
+  const maxAllowed = Math.min(SIDEBAR_CAP, viewportW - SIDEBAR_MIN_MAIN);
+  const lo = Math.min(SIDEBAR_MIN, maxAllowed);
+  const hi = Math.max(lo, maxAllowed);
+  return Math.min(Math.max(Math.round(px), lo), hi);
+}
+
 export function JsonWorkspace() {
   const [tabs, setTabs] = useState<Tab[]>(() => [
     { id: 'tab-0', name: '', text: '{\n  \n}' },
@@ -103,6 +138,11 @@ export function JsonWorkspace() {
   const [findMatchIndex, setFindMatchIndex] = useState(-1);
   const [watchInput, setWatchInput] = useState('');
   const [busyAction, setBusyAction] = useState<'format' | 'minify' | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
+  const [electronGitCapable, setElectronGitCapable] = useState<boolean | null>(
+    null
+  );
+  const [gitPullBusy, setGitPullBusy] = useState(false);
 
   const editorViewRef = useRef<EditorView | null>(null);
   const watchInputRef = useRef<HTMLInputElement>(null);
@@ -115,6 +155,9 @@ export function JsonWorkspace() {
   );
   const nameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeIdRef = useRef(activeId);
+  const sidebarWidthRef = useRef(sidebarWidth);
+
+  sidebarWidthRef.current = sidebarWidth;
 
   activeIdRef.current = activeId;
 
@@ -182,6 +225,27 @@ export function JsonWorkspace() {
 
   useEffect(() => {
     migrateWorkspaceStorageKeys();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const api =
+        typeof window !== 'undefined' ? window.electron : undefined;
+      if (!api?.gitUpdateCapable) {
+        if (!cancelled) setElectronGitCapable(false);
+        return;
+      }
+      try {
+        const r = await api.gitUpdateCapable();
+        if (!cancelled) setElectronGitCapable(Boolean(r?.capable));
+      } catch {
+        if (!cancelled) setElectronGitCapable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -257,6 +321,17 @@ export function JsonWorkspace() {
     } catch {
       /* ignore */
     }
+    try {
+      const sw = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+      if (sw !== null) {
+        const n = Number.parseInt(sw, 10);
+        if (Number.isFinite(n)) {
+          setSidebarWidth(clampSidebarWidth(n, window.innerWidth));
+        }
+      }
+    } catch {
+      /* ignore */
+    }
     queueMicrotask(() => setHydrated(true));
   }, []);
 
@@ -321,6 +396,29 @@ export function JsonWorkspace() {
     }, 400);
     return () => clearTimeout(t);
   }, [closedHistory, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          SIDEBAR_WIDTH_STORAGE_KEY,
+          String(sidebarWidth)
+        );
+      } catch {
+        /* ignore */
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [sidebarWidth, hydrated]);
+
+  useEffect(() => {
+    const onResize = () => {
+      setSidebarWidth((w) => clampSidebarWidth(w, window.innerWidth));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const updateActiveText = useCallback(
     (text: string) => {
@@ -619,6 +717,47 @@ export function JsonWorkspace() {
     setWatchEntries([]);
   }, []);
 
+  const onSidebarResizerPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const pointerId = e.pointerId;
+      const startX = e.clientX;
+      const startW = sidebarWidthRef.current;
+
+      const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        setSidebarWidth(
+          clampSidebarWidth(startW + ev.clientX - startX, window.innerWidth)
+        );
+      };
+      const onUp = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        document.body.classList.remove('is-resizing-sidebar');
+      };
+
+      document.body.classList.add('is-resizing-sidebar');
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    },
+    []
+  );
+
+  const onSidebarResizerKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const vw = window.innerWidth;
+      const delta = e.key === 'ArrowRight' ? 12 : -12;
+      setSidebarWidth((w) => clampSidebarWidth(w + delta, vw));
+    },
+    []
+  );
+
   const findNext = (delta: number) => {
     const n = findMatches.length;
     if (n === 0) return;
@@ -697,6 +836,46 @@ export function JsonWorkspace() {
     setCompareOpen(true);
   };
 
+  const pullUpdatesFromGithub = useCallback(async () => {
+    const pull = window.electron?.pullFromGithubMaster;
+    if (!pull) return;
+    setGitPullBusy(true);
+    try {
+      const res = await pull();
+      if (res.ok) {
+        const detail = [res.stdout, res.stderr]
+          .filter(Boolean)
+          .join('\n')
+          .trim();
+        toast.success('Updated from GitHub', {
+          description:
+            detail.slice(0, 380) ||
+            'Latest changes pulled. Restart the app to load new code.',
+          duration: 12_000,
+          action: window.electron?.relaunchApp
+            ? {
+                label: 'Restart app',
+                onClick: () => {
+                  void window.electron?.relaunchApp?.();
+                },
+              }
+            : undefined,
+        });
+      } else {
+        toast.error(res.error ?? 'Git pull failed', {
+          description: [res.stderr, res.stdout]
+            .filter(Boolean)
+            .join('\n')
+            .slice(0, 480),
+        });
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Update failed');
+    } finally {
+      setGitPullBusy(false);
+    }
+  }, []);
+
   const findStatus =
     findMatches.length === 0
       ? findQuery
@@ -707,7 +886,12 @@ export function JsonWorkspace() {
         : `${findMatchIndex + 1} / ${findMatches.length}`;
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      style={
+        { '--app-sidebar-width': `${sidebarWidth}px` } as React.CSSProperties
+      }
+    >
       <aside className="sidebar">
         <div className="sidebar-head">
           <h1 className="sidebar-title">Watchfox</h1>
@@ -909,7 +1093,40 @@ export function JsonWorkspace() {
             )}
           </div>
         </details>
+
+        {electronGitCapable === true ? (
+          <div className="electron-git-update">
+            <button
+              type="button"
+              className="btn primary electron-git-update-btn"
+              disabled={gitPullBusy}
+              title="git pull origin master (or main). Requires git installed and this folder to be a clone with remotes configured."
+              onClick={() => void pullUpdatesFromGithub()}
+            >
+              {gitPullBusy ? 'Updating…' : 'Update from GitHub'}
+            </button>
+            <p className="electron-git-update-hint muted">
+              Pulls <code>origin/master</code>, or <code>main</code> if master is
+              missing.
+            </p>
+          </div>
+        ) : null}
       </aside>
+
+      <div
+        className="sidebar-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        tabIndex={0}
+        aria-valuemin={SIDEBAR_MIN}
+        aria-valuemax={SIDEBAR_CAP}
+        aria-valuenow={Math.round(sidebarWidth)}
+        onPointerDown={onSidebarResizerPointerDown}
+        onKeyDown={onSidebarResizerKeyDown}
+      >
+        <span className="sidebar-resizer-grip" aria-hidden />
+      </div>
 
       <div className="main">
         <header
