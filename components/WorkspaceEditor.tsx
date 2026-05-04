@@ -27,29 +27,29 @@ import { watchPlusGutter } from '@/lib/codemirror-watch-gutter';
 import type { TabLanguage } from '@/lib/workspace-types';
 
 const watchfoxHighlight = HighlightStyle.define([
-  { tag: tags.keyword, color: '#ff7b72' },
-  { tag: tags.controlKeyword, color: '#ff7b72' },
-  { tag: tags.definitionKeyword, color: '#ff7b72' },
-  { tag: tags.moduleKeyword, color: '#ff7b72' },
-  { tag: tags.string, color: '#a5d6ff' },
-  { tag: tags.regexp, color: '#a5d6ff' },
-  { tag: tags.number, color: '#79c0ff' },
-  { tag: tags.bool, color: '#79c0ff' },
-  { tag: tags.null, color: '#79c0ff' },
-  { tag: tags.propertyName, color: '#79c0ff' },
-  { tag: tags.attributeName, color: '#79c0ff' },
-  { tag: tags.variableName, color: '#ffa657' },
-  { tag: tags.className, color: '#ffa657' },
-  { tag: tags.typeName, color: '#ffa657' },
-  { tag: tags.tagName, color: '#7ee787' },
-  { tag: tags.comment, color: '#8b949e', fontStyle: 'italic' },
-  { tag: tags.bracket, color: '#e6edf3' },
-  { tag: tags.brace, color: '#ffa657' },
-  { tag: tags.paren, color: '#e6edf3' },
-  { tag: tags.squareBracket, color: '#d2a8ff' },
-  { tag: tags.separator, color: '#8b949e' },
-  { tag: tags.operator, color: '#ff7b72' },
-  { tag: tags.meta, color: '#8b949e' },
+  { tag: tags.keyword, color: '#c5a396' },
+  { tag: tags.controlKeyword, color: '#c5a396' },
+  { tag: tags.definitionKeyword, color: '#c5a396' },
+  { tag: tags.moduleKeyword, color: '#c5a396' },
+  { tag: tags.string, color: '#a7c4d4' },
+  { tag: tags.regexp, color: '#a7c4d4' },
+  { tag: tags.number, color: '#9fb8ce' },
+  { tag: tags.bool, color: '#9fb8ce' },
+  { tag: tags.null, color: '#9fb8ce' },
+  { tag: tags.propertyName, color: '#9fb8ce' },
+  { tag: tags.attributeName, color: '#9fb8ce' },
+  { tag: tags.variableName, color: '#d4c49a' },
+  { tag: tags.className, color: '#d4c49a' },
+  { tag: tags.typeName, color: '#d4c49a' },
+  { tag: tags.tagName, color: '#a4b89e' },
+  { tag: tags.comment, color: '#918d86', fontStyle: 'italic' },
+  { tag: tags.bracket, color: '#ddd9d2' },
+  { tag: tags.brace, color: '#d4c49a' },
+  { tag: tags.paren, color: '#ddd9d2' },
+  { tag: tags.squareBracket, color: '#b8aac8' },
+  { tag: tags.separator, color: '#918d86' },
+  { tag: tags.operator, color: '#c5a396' },
+  { tag: tags.meta, color: '#918d86' },
 ]);
 
 const watchfoxTheme = EditorView.theme({
@@ -78,10 +78,10 @@ const watchfoxTheme = EditorView.theme({
     borderRight: '1px solid var(--border)',
   },
   '.cm-activeLine': {
-    backgroundColor: 'rgba(88, 166, 255, 0.06)',
+    backgroundColor: 'color-mix(in srgb, var(--accent) 9%, transparent)',
   },
   '.cm-activeLineGutter': {
-    backgroundColor: 'rgba(88, 166, 255, 0.08)',
+    backgroundColor: 'color-mix(in srgb, var(--accent) 12%, transparent)',
     color: 'var(--text)',
   },
   '.cm-lineNumbers .cm-gutterElement': {
@@ -90,11 +90,11 @@ const watchfoxTheme = EditorView.theme({
     cursor: 'pointer',
   },
   '.cm-lineNumbers .cm-gutterElement.cm-bookmarkedLineNumber': {
-    color: '#f85149',
+    color: 'var(--bookmark-line)',
     fontWeight: '600',
   },
   '.cm-activeLineGutter.cm-bookmarkedLineNumber': {
-    color: '#f85149',
+    color: 'var(--bookmark-line)',
     fontWeight: '600',
   },
   '.cm-foldGutter .cm-gutterElement': {
@@ -131,10 +131,10 @@ const watchfoxTheme = EditorView.theme({
     padding: '0 0.25rem',
   },
   '.cm-selectionBackground': {
-    backgroundColor: 'rgba(253, 224, 71, 0.38)',
+    backgroundColor: 'rgba(218, 198, 155, 0.34)',
   },
   '&.cm-focused .cm-selectionLayer .cm-selectionBackground': {
-    backgroundColor: 'rgba(253, 224, 71, 0.52)',
+    backgroundColor: 'rgba(218, 198, 155, 0.46)',
   },
 });
 
