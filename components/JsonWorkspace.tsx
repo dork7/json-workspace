@@ -1,5 +1,8 @@
 'use client';
 
+import dynamic from 'next/dynamic';
+import { foldAll, unfoldAll } from '@codemirror/language';
+import type { EditorView } from '@codemirror/view';
 import {
   useCallback,
   useEffect,
@@ -7,8 +10,13 @@ import {
   useRef,
   useState,
 } from 'react';
-import { JsonTreeView } from '@/components/JsonTreeView';
-import { JsTsTreeView } from '@/components/JsTsTreeView';
+import { flushSync } from 'react-dom';
+import {
+  lineSnippet,
+  lineStartOffset,
+  offsetToLineNumber,
+} from '@/lib/editor-lines';
+import { cmPlaceCursor, cmSelectRange } from '@/lib/codemirror-nav';
 import { collectJsonPaths, getPathValue } from '@/lib/json-path';
 import {
   displayTextForCompare,
@@ -21,13 +29,24 @@ import {
   CLOSED_TABS_STORAGE_KEY,
   MAX_CLOSED_HISTORY,
   WORKSPACE_STORAGE_KEY,
+  WATCH_STORAGE_KEY,
+  migrateWorkspaceStorageKeys,
   type ClosedTabSnapshot,
   parseClosedHistory,
   parseWorkspace,
 } from '@/lib/workspace-storage';
+import {
+  extractWatchExprFromLine,
+  sliceDocLineAt,
+} from '@/lib/watch-extract-from-editor';
 import type { Tab, TabLanguage } from '@/lib/workspace-types';
+import { toast } from 'sonner';
 
-const WATCH_STORAGE_KEY = 'json-workspace-watch-v1';
+const WorkspaceEditor = dynamic(
+  () => import('@/components/WorkspaceEditor'),
+  { ssr: false }
+);
+
 const WATCH_VALUE_MAX = 4000;
 
 type WatchEntry = { id: string; expr: string };
@@ -77,7 +96,6 @@ export function JsonWorkspace() {
   const [hydrated, setHydrated] = useState(false);
   const [closedHistory, setClosedHistory] = useState<ClosedTabSnapshot[]>([]);
   const [watchEntries, setWatchEntries] = useState<WatchEntry[]>([]);
-  const [editView, setEditView] = useState<'text' | 'tree'>('text');
   const [compareOpen, setCompareOpen] = useState(false);
   const [compareAId, setCompareAId] = useState('tab-0');
   const [compareBId, setCompareBId] = useState('tab-0');
@@ -86,8 +104,15 @@ export function JsonWorkspace() {
   const [watchInput, setWatchInput] = useState('');
   const [busyAction, setBusyAction] = useState<'format' | 'minify' | null>(null);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const treeRef = useRef<HTMLDivElement>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const watchInputRef = useRef<HTMLInputElement>(null);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const findNextButtonRef = useRef<HTMLButtonElement>(null);
+  const findPrevButtonRef = useRef<HTMLButtonElement>(null);
+  /** After toolbar find navigation, stay in toolbar instead of focusing the editor */
+  const findToolbarFocusTargetRef = useRef<'next' | 'prev' | 'find' | null>(
+    null
+  );
   const nameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeIdRef = useRef(activeId);
 
@@ -111,6 +136,11 @@ export function JsonWorkspace() {
     return [...new Set(out)].sort((a, b) => a.localeCompare(b));
   }, [watchRoot]);
 
+  const pathSuggestionsSet = useMemo(
+    () => new Set(pathSuggestions),
+    [pathSuggestions]
+  );
+
   const findMatches = useMemo(() => {
     if (!findQuery) return [] as { start: number; end: number }[];
     const text = activeTab.text;
@@ -125,9 +155,51 @@ export function JsonWorkspace() {
     return matches;
   }, [findQuery, activeTab.text]);
 
+  const activeBookmarksSanitized = useMemo(() => {
+    const text = activeTab.text;
+    const raw = activeTab.bookmarks ?? [];
+    return raw
+      .filter((b) => b.anchor >= 0 && b.anchor <= text.length)
+      .slice()
+      .sort((a, b) => a.anchor - b.anchor);
+  }, [activeTab.bookmarks, activeTab.text]);
+
+  const bookmarkAnchorsSet = useMemo(() => {
+    const text = activeTab.text;
+    const s = new Set<number>();
+    for (const b of activeTab.bookmarks ?? []) {
+      if (typeof b.anchor !== 'number') continue;
+      if (b.anchor < 0 || b.anchor > text.length) continue;
+      s.add(lineStartOffset(text, b.anchor));
+    }
+    return s;
+  }, [activeTab.bookmarks, activeTab.text]);
+
+  /** Reset navigation when query or buffer changes — editor selection moves only after Enter / Prev / Next. */
   useEffect(() => {
-    setFindMatchIndex(findMatches.length ? 0 : -1);
-  }, [findMatches]);
+    setFindMatchIndex(-1);
+  }, [findQuery, activeTab.text]);
+
+  useEffect(() => {
+    migrateWorkspaceStorageKeys();
+  }, []);
+
+  useEffect(() => {
+    const el = watchInputRef.current;
+    if (!el) return;
+    /** Native `change` fires when a datalist option is chosen (React `onChange` maps to `input`, so it misses this). */
+    const onSuggestionCommitted = () => {
+      const expr = el.value.trim();
+      if (!expr || !pathSuggestionsSet.has(expr)) return;
+      setWatchEntries((w) => {
+        if (w.some((x) => x.expr === expr)) return w;
+        return [...w, { id: uid(), expr }];
+      });
+      setWatchInput('');
+    };
+    el.addEventListener('change', onSuggestionCommitted);
+    return () => el.removeEventListener('change', onSuggestionCommitted);
+  }, [pathSuggestionsSet]);
 
   useEffect(() => {
     try {
@@ -260,23 +332,87 @@ export function JsonWorkspace() {
     [activeId, scheduleTabNameRefresh]
   );
 
-  const onTextInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    updateActiveText(e.target.value);
+  const onTextInput = (value: string) => {
+    updateActiveText(value);
   };
 
-  const onTextKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Tab' || editView !== 'text') return;
-    e.preventDefault();
-    const ta = e.currentTarget;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const v = ta.value;
-    const next = v.slice(0, start) + '\t' + v.slice(end);
-    updateActiveText(next);
-    requestAnimationFrame(() => {
-      ta.selectionStart = ta.selectionEnd = start + 1;
-    });
-  };
+  const toggleBookmarkAtLine = useCallback(
+    (docLineStart: number) => {
+      const text = activeTab.text;
+      const lineStart = lineStartOffset(
+        text,
+        Math.min(Math.max(0, docLineStart), text.length)
+      );
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== activeId) return t;
+          const list = [...(t.bookmarks ?? [])].filter(
+            (b) => b.anchor >= 0 && b.anchor <= text.length
+          );
+          const idx = list.findIndex(
+            (b) =>
+              lineStartOffset(text, Math.min(b.anchor, text.length)) ===
+              lineStart
+          );
+          if (idx >= 0) {
+            list.splice(idx, 1);
+            return {
+              ...t,
+              ...(list.length ? { bookmarks: list } : { bookmarks: undefined }),
+            };
+          }
+          list.push({ id: uid(), anchor: lineStart });
+          list.sort((a, b) => a.anchor - b.anchor);
+          return { ...t, bookmarks: list };
+        })
+      );
+    },
+    [activeId, activeTab.text]
+  );
+
+  const toggleBookmarkAtCursor = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    const text = activeTab.text;
+    const pos = view.state.selection.main.head;
+    toggleBookmarkAtLine(lineStartOffset(text, pos));
+  }, [activeTab.text, toggleBookmarkAtLine]);
+
+  const removeBookmark = useCallback(
+    (bookmarkId: string) => {
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.id !== activeId) return t;
+          const list = (t.bookmarks ?? []).filter((b) => b.id !== bookmarkId);
+          return {
+            ...t,
+            ...(list.length ? { bookmarks: list } : { bookmarks: undefined }),
+          };
+        })
+      );
+    },
+    [activeId]
+  );
+
+  const clearAllBookmarks = useCallback(() => {
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeId ? { ...t, bookmarks: undefined } : t
+      )
+    );
+  }, [activeId]);
+
+  const goToBookmark = useCallback(
+    (anchor: number) => {
+      const view = editorViewRef.current;
+      if (!view) return;
+      const text = activeTab.text;
+      const a = Math.min(Math.max(0, anchor), text.length);
+      cmPlaceCursor(view, a);
+      view.focus();
+    },
+    [activeTab.text]
+  );
 
   const selectTab = (id: string) => {
     setActiveId(id);
@@ -368,7 +504,7 @@ export function JsonWorkspace() {
         error?: string;
       };
       if (!data.ok || typeof data.text !== 'string') {
-        alert(data.error ?? 'Cannot format.');
+        toast.error(data.error ?? 'Cannot format.');
         return;
       }
       const out = data.text;
@@ -379,6 +515,8 @@ export function JsonWorkspace() {
           return name !== null ? { ...t, text: out, name } : { ...t, text: out };
         })
       );
+    } catch {
+      toast.error('Format request failed. Check your connection and try again.');
     } finally {
       setBusyAction(null);
     }
@@ -401,7 +539,7 @@ export function JsonWorkspace() {
         error?: string;
       };
       if (!data.ok || typeof data.text !== 'string') {
-        alert(data.error ?? 'Cannot minify.');
+        toast.error(data.error ?? 'Cannot minify.');
         return;
       }
       const out = data.text;
@@ -412,48 +550,106 @@ export function JsonWorkspace() {
           return name !== null ? { ...t, text: out, name } : { ...t, text: out };
         })
       );
+    } catch {
+      toast.error('Minify request failed. Check your connection and try again.');
     } finally {
       setBusyAction(null);
     }
   };
 
-  const onCollapseAll = () => {
-    treeRef.current?.querySelectorAll('details').forEach((d) => {
-      (d as HTMLDetailsElement).open = false;
-    });
-  };
+  const onCollapseAll = useCallback(() => {
+    const view = editorViewRef.current;
+    if (view) foldAll(view);
+  }, []);
 
-  const onExpandAll = () => {
-    treeRef.current?.querySelectorAll('details').forEach((d) => {
-      (d as HTMLDetailsElement).open = true;
-    });
-  };
+  const onExpandAll = useCallback(() => {
+    const view = editorViewRef.current;
+    if (view) unfoldAll(view);
+  }, []);
 
   const addWatch = () => {
     const expr = watchInput.trim();
     if (!expr) return;
-    setWatchEntries((w) => [...w, { id: uid(), expr }]);
+    setWatchEntries((w) => {
+      if (w.some((x) => x.expr === expr)) return w;
+      return [...w, { id: uid(), expr }];
+    });
     setWatchInput('');
   };
+
+  const addWatchFromDocLineStart = useCallback(
+    (docLineStart: number) => {
+      const text = activeTab.text;
+      const lineText = sliceDocLineAt(text, docLineStart);
+      const col = lineText.search(/\S/u);
+      const expr = extractWatchExprFromLine(
+        lineText,
+        activeLang,
+        col >= 0 ? col : 0
+      );
+      if (!expr) {
+        toast.error(
+          'Could not infer a watch path from this line. Try a line with a JSON key, const/function/class name, or identifier.'
+        );
+        return;
+      }
+      let added = false;
+      flushSync(() => {
+        setWatchEntries((w) => {
+          if (w.some((x) => x.expr === expr)) return w;
+          added = true;
+          return [...w, { id: uid(), expr }];
+        });
+      });
+      if (!added) {
+        toast.error(`Watch already lists "${expr}".`);
+        return;
+      }
+      setWatchInput('');
+      queueMicrotask(() => editorViewRef.current?.focus());
+    },
+    [activeLang, activeTab.text]
+  );
 
   const removeWatch = (id: string) => {
     setWatchEntries((w) => w.filter((x) => x.id !== id));
   };
 
+  const clearAllWatches = useCallback(() => {
+    setWatchEntries([]);
+  }, []);
+
   const findNext = (delta: number) => {
-    if (findMatches.length === 0) return;
-    setFindMatchIndex(
-      (i) => (i + delta + findMatches.length) % findMatches.length
-    );
+    const n = findMatches.length;
+    if (n === 0) return;
+    setFindMatchIndex((i) => {
+      if (delta > 0) {
+        if (i < 0) return 0;
+        return (i + 1) % n;
+      }
+      if (i < 0) return n - 1;
+      return (i - 1 + n) % n;
+    });
   };
 
   useEffect(() => {
     if (findMatchIndex < 0 || findMatchIndex >= findMatches.length) return;
     const m = findMatches[findMatchIndex];
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.focus();
-    ta.setSelectionRange(m.start, m.end);
+    const view = editorViewRef.current;
+    if (!view) return;
+    cmSelectRange(view, m.start, m.end);
+    const focusTarget = findToolbarFocusTargetRef.current;
+    if (focusTarget) {
+      findToolbarFocusTargetRef.current = null;
+      view.scrollDOM.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      queueMicrotask(() => {
+        if (focusTarget === 'next') findNextButtonRef.current?.focus();
+        else if (focusTarget === 'prev') findPrevButtonRef.current?.focus();
+        else findInputRef.current?.focus();
+      });
+      return;
+    }
+    view.focus();
   }, [findMatchIndex, findMatches]);
 
   const compareDiff = useMemo(() => {
@@ -468,11 +664,34 @@ export function JsonWorkspace() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && compareOpen) setCompareOpen(false);
+      if (e.key === 'Escape' && compareOpen) {
+        setCompareOpen(false);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        if (compareOpen) setCompareOpen(false);
+        queueMicrotask(() => {
+          findInputRef.current?.focus();
+          findInputRef.current?.select();
+        });
+        return;
+      }
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.altKey &&
+        e.key.toLowerCase() === 'b'
+      ) {
+        if (compareOpen) return;
+        const view = editorViewRef.current;
+        if (!view?.hasFocus) return;
+        e.preventDefault();
+        toggleBookmarkAtCursor();
+      }
     };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [compareOpen]);
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [compareOpen, toggleBookmarkAtCursor]);
 
   const onCompare = () => {
     setCompareOpen(true);
@@ -483,23 +702,37 @@ export function JsonWorkspace() {
       ? findQuery
         ? 'No matches'
         : ''
-      : `${findMatchIndex + 1} / ${findMatches.length}`;
+      : findMatchIndex < 0
+        ? `${findMatches.length} match${findMatches.length === 1 ? '' : 'es'} · Enter`
+        : `${findMatchIndex + 1} / ${findMatches.length}`;
 
   return (
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-head">
-          <h1 className="sidebar-title">Workspace</h1>
+          <h1 className="sidebar-title">Watchfox</h1>
         </div>
 
         <div className="watch-panel">
-          <h2 className="watch-heading">Watch</h2>
+          <div className="watch-panel-head">
+            <h2 className="watch-heading">Watch</h2>
+            <button
+              type="button"
+              className="btn ghost watch-clear-all"
+              disabled={watchEntries.length === 0}
+              title="Remove all watch expressions"
+              onClick={clearAllWatches}
+            >
+              Clear all
+            </button>
+          </div>
           <p className="watch-hint">
             Paths from root, e.g. <code>user</code>, <code>items[0]</code>,{' '}
-            <code>["key-name"]</code>
+            <code>["key-name"]</code>. Choosing a suggestion adds it to the list.
           </p>
           <div className="watch-add">
             <input
+              ref={watchInputRef}
               type="text"
               className="watch-input"
               list="watch-datalist"
@@ -728,69 +961,53 @@ export function JsonWorkspace() {
               {busyAction === 'minify' ? 'Minify…' : 'Minify'}
             </button>
             <span className="toolbar-sep" aria-hidden />
-            <span className="toolbar-label">View</span>
-            <label className="toggle">
-              <input
-                type="radio"
-                name="edit-view"
-                checked={editView === 'text'}
-                onChange={() => setEditView('text')}
-              />{' '}
-              Text
-            </label>
-            <label className="toggle">
-              <input
-                type="radio"
-                name="edit-view"
-                checked={editView === 'tree'}
-                onChange={() => setEditView('tree')}
-              />{' '}
-              Tree
-            </label>
-            <span
-              className={`toolbar-sep tree-only${editView === 'tree' ? '' : ' hidden'}`}
-              aria-hidden
-            />
-            <button
-              type="button"
-              className={`btn tree-only${editView === 'tree' ? '' : ' hidden'}`}
-              onClick={onCollapseAll}
-            >
+            <button type="button" className="btn" onClick={onCollapseAll}>
               Collapse all
             </button>
-            <button
-              type="button"
-              className={`btn tree-only${editView === 'tree' ? '' : ' hidden'}`}
-              onClick={onExpandAll}
-            >
+            <button type="button" className="btn" onClick={onExpandAll}>
               Expand all
             </button>
           </div>
-          <div
-            className={`toolbar-search${editView === 'tree' ? ' hidden' : ''}`}
-            id="toolbar-search"
-          >
+          <div className="toolbar-search" id="toolbar-search">
             <label className="search-field">
               Find
               <input
+                ref={findInputRef}
                 type="search"
                 placeholder="Search in tab…"
+                title="⌘F / Ctrl+F — Enter next · Shift+Enter prev · focus stays in Find"
                 autoComplete="off"
+                spellCheck={false}
                 value={findQuery}
                 onChange={(e) => setFindQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    findToolbarFocusTargetRef.current = 'find';
+                    findNext(e.shiftKey ? -1 : 1);
+                  }
+                }}
               />
             </label>
             <button
+              ref={findPrevButtonRef}
               type="button"
               className="btn ghost"
-              onClick={() => findNext(-1)}
+              onClick={() => {
+                findToolbarFocusTargetRef.current = 'prev';
+                findNext(-1);
+              }}
             >
               Prev
             </button>
             <button
+              ref={findNextButtonRef}
               type="button"
               className="btn ghost"
-              onClick={() => findNext(1)}
+              onClick={() => {
+                findToolbarFocusTargetRef.current = 'next';
+                findNext(1);
+              }}
             >
               Next
             </button>
@@ -802,35 +1019,77 @@ export function JsonWorkspace() {
           className={`editor-section${compareOpen ? ' hidden' : ''}`}
           aria-label="Editor"
         >
-          <div
-            className={`editor-pane text-pane${editView === 'tree' ? ' hidden' : ''}`}
-          >
-            <textarea
-              ref={textareaRef}
-              className="json-textarea"
-              spellCheck={false}
-              placeholder={
-                activeLang === 'json'
-                  ? 'Paste JSON here. Tree, Watch, and Format need valid JSON.'
-                  : activeLang === 'typescript'
-                    ? 'Paste TypeScript here. Tree and Watch use the parsed AST (paths like program.body[0]).'
-                    : 'Paste JavaScript here. Tree and Watch use the parsed AST (paths like program.body[0]).'
-              }
-              value={activeTab.text}
-              onChange={onTextInput}
-              onKeyDown={onTextKeyDown}
-            />
-          </div>
-          <div
-            className={`editor-pane tree-pane${editView === 'text' ? ' hidden' : ''}`}
-            id="tree-pane"
-          >
-            <div ref={treeRef} id="json-tree-root">
-              {activeLang === 'json' ? (
-                <JsonTreeView text={activeTab.text} />
-              ) : (
-                <JsTsTreeView text={activeTab.text} lang={activeLang} />
-              )}
+          <div className="editor-pane">
+            <div className="editor-code-root">
+              {activeBookmarksSanitized.length > 0 ? (
+                <div
+                  className="editor-bookmarks-strip"
+                  aria-label="Bookmarks"
+                >
+                  <div className="editor-bookmarks-strip-header">
+                    <span className="editor-bookmarks-strip-label">
+                      Bookmarks
+                    </span>
+                    <button
+                      type="button"
+                      className="btn ghost editor-bookmarks-clear-all"
+                      title="Remove all bookmarks in this tab"
+                      onClick={() => clearAllBookmarks()}
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  {activeBookmarksSanitized.map((b) => {
+                    const anchor = Math.min(b.anchor, activeTab.text.length);
+                    const line = offsetToLineNumber(activeTab.text, anchor);
+                    const snippet = lineSnippet(activeTab.text, anchor, 48);
+                    return (
+                      <div key={b.id} className="editor-bookmark-pill">
+                        <button
+                          type="button"
+                          className="editor-bookmark-pill-main"
+                          onClick={() => goToBookmark(b.anchor)}
+                        >
+                          <span className="editor-bookmark-pill-line">
+                            L{line}
+                          </span>
+                          <span className="editor-bookmark-pill-snippet">
+                            {snippet}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="editor-bookmark-pill-remove"
+                          aria-label={`Remove bookmark on line ${line}`}
+                          onClick={() => removeBookmark(b.id)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <div className="editor-code-frame editor-code-frame-cm">
+                <div className="editor-cm-mount">
+                  <WorkspaceEditor
+                    value={activeTab.text}
+                    onChange={onTextInput}
+                    lang={activeLang}
+                    placeholder={
+                      activeLang === 'json'
+                        ? 'Paste JSON here. Watch and Format need valid JSON.'
+                        : activeLang === 'typescript'
+                          ? 'Paste TypeScript here. Watch uses the parsed AST (paths like program.body[0]).'
+                          : 'Paste JavaScript here. Watch uses the parsed AST (paths like program.body[0]).'
+                    }
+                    editorViewRef={editorViewRef}
+                    bookmarkAnchors={bookmarkAnchorsSet}
+                    onBookmarkLineToggle={toggleBookmarkAtLine}
+                    onWatchLineAdd={addWatchFromDocLineStart}
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </section>

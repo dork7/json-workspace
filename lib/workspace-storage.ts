@@ -1,8 +1,36 @@
-import type { Tab, TabLanguage } from '@/lib/workspace-types';
+import type { EditorBookmark, Tab, TabLanguage } from '@/lib/workspace-types';
 
 /** Tabs + active tab — survives refresh */
-export const WORKSPACE_STORAGE_KEY = 'json-workspace-workspace-v1';
-export const CLOSED_TABS_STORAGE_KEY = 'json-workspace-closed-tabs-v1';
+export const WORKSPACE_STORAGE_KEY = 'watchfox-workspace-v1';
+export const CLOSED_TABS_STORAGE_KEY = 'watchfox-closed-tabs-v1';
+/** Watch expressions panel */
+export const WATCH_STORAGE_KEY = 'watchfox-watch-v1';
+
+const LEGACY_KEYS = {
+  workspace: 'json-workspace-workspace-v1',
+  closedTabs: 'json-workspace-closed-tabs-v1',
+  watch: 'json-workspace-watch-v1',
+} as const;
+
+function migrateStoragePair(nextKey: string, legacyKey: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (localStorage.getItem(nextKey) !== null) return;
+    const legacy = localStorage.getItem(legacyKey);
+    if (legacy === null) return;
+    localStorage.setItem(nextKey, legacy);
+    localStorage.removeItem(legacyKey);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Copy data from legacy keys once so upgrades keep tabs, watch list, and history. */
+export function migrateWorkspaceStorageKeys(): void {
+  migrateStoragePair(WORKSPACE_STORAGE_KEY, LEGACY_KEYS.workspace);
+  migrateStoragePair(CLOSED_TABS_STORAGE_KEY, LEGACY_KEYS.closedTabs);
+  migrateStoragePair(WATCH_STORAGE_KEY, LEGACY_KEYS.watch);
+}
 
 export const MAX_CLOSED_HISTORY = 40;
 
@@ -47,12 +75,26 @@ export function parseWorkspace(raw: string | null): PersistedWorkspace | null {
           : lang !== undefined
             ? false
             : undefined;
+      const bookmarksRaw = (t as { bookmarks?: unknown }).bookmarks;
+      let bookmarks: EditorBookmark[] | undefined;
+      if (Array.isArray(bookmarksRaw)) {
+        const bm: EditorBookmark[] = [];
+        for (const b of bookmarksRaw) {
+          if (!b || typeof b !== 'object') continue;
+          const bid = (b as { id?: unknown }).id;
+          const anch = (b as { anchor?: unknown }).anchor;
+          if (typeof bid !== 'string' || typeof anch !== 'number') continue;
+          bm.push({ id: bid, anchor: anch });
+        }
+        if (bm.length > 0) bookmarks = bm;
+      }
       parsed.push({
         id,
         text,
         name: typeof name === 'string' ? name : '',
         ...(lang ? { lang } : {}),
         ...(langAuto !== undefined ? { langAuto } : {}),
+        ...(bookmarks ? { bookmarks } : {}),
       });
     }
     if (parsed.length === 0) return null;

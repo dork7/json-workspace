@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { SonnerToaster } from '@/components/SonnerToaster';
 
 export const metadata: Metadata = {
-  title: 'JSON workspace',
+  title: 'Watchfox',
   description:
-    'Multi-tab JSON editor; tabs can also hold plain text or code. Tree, watch, and format require valid JSON.',
+    'Watchfox — multi-tab JSON / JS / TS workspace with watch paths, find, bookmarks, and compare.',
 };
 
 export default function RootLayout({
@@ -14,7 +15,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <SonnerToaster />
+      </body>
     </html>
   );
 }
