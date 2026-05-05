@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -22,127 +22,6 @@ let embeddedNextRunning = false;
 let mainWindow = null;
 let serverProcess = null;
 let isShuttingDown = false;
-
-function findGitRepoRoot() {
-  const seen = new Set();
-  const dirs = [];
-
-  function add(p) {
-    if (!p || typeof p !== 'string') return;
-    let resolved;
-    try {
-      resolved = path.resolve(p);
-    } catch {
-      return;
-    }
-    if (seen.has(resolved)) return;
-    seen.add(resolved);
-    dirs.push(resolved);
-  }
-
-  add(path.join(__dirname, '..'));
-  if (process.env.WATCHFOX_GIT_ROOT) {
-    add(process.env.WATCHFOX_GIT_ROOT);
-  }
-  try {
-    add(process.cwd());
-  } catch {
-    /* ignore */
-  }
-
-  for (const dir of dirs) {
-    try {
-      if (fs.existsSync(path.join(dir, '.git'))) return dir;
-    } catch {
-      /* ignore */
-    }
-  }
-  return null;
-}
-
-function gitPullOriginBranch(repoRoot, branch) {
-  return new Promise((resolve) => {
-    const child = spawn('git', ['pull', 'origin', branch], {
-      cwd: repoRoot,
-      env: process.env,
-      windowsHide: true,
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (d) => {
-      stdout += d.toString();
-    });
-    child.stderr?.on('data', (d) => {
-      stderr += d.toString();
-    });
-    child.on('error', (err) => {
-      resolve({
-        ok: false,
-        code: null,
-        stdout,
-        stderr: `${stderr}\n${err.message}`.trim(),
-        error: err.message,
-      });
-    });
-    child.on('close', (code) => {
-      resolve({
-        ok: code === 0,
-        code,
-        stdout: stdout.trimEnd(),
-        stderr: stderr.trimEnd(),
-      });
-    });
-  });
-}
-
-function registerGitIpc() {
-  ipcMain.handle('watchfox:git-update-capable', () => {
-    const root = findGitRepoRoot();
-    return {
-      /** Always true in Electron so the sidebar control is visible (incl. packaged builds). */
-      capable: true,
-      hasRepo: Boolean(root),
-      repoRoot: root || undefined,
-      packaged: app.isPackaged,
-    };
-  });
-
-  ipcMain.handle('watchfox:pull-github-master', async () => {
-    const repoRoot = findGitRepoRoot();
-    if (!repoRoot) {
-      const packagedHint = isPackaged()
-        ? 'Packaged Watchfox does not include a git repo. Either download a newer release from GitHub, or set WATCHFOX_GIT_ROOT to a local clone path (folder containing .git) and restart the app. Git must be on your PATH.'
-        : 'No git repository found. Run from your project clone, or set WATCHFOX_GIT_ROOT to the repo root.';
-      return {
-        ok: false,
-        error: packagedHint,
-      };
-    }
-
-    let result = await gitPullOriginBranch(repoRoot, 'master');
-    const combined = `${result.stdout}\n${result.stderr}`;
-    if (
-      !result.ok &&
-      /Could not find remote ref|no such ref|fatal: couldn't find remote ref/i.test(
-        combined
-      )
-    ) {
-      result = await gitPullOriginBranch(repoRoot, 'main');
-    }
-
-    if (!result.ok && !result.error) {
-      result.error =
-        result.stderr ||
-        (result.code != null ? `git exited with code ${result.code}` : 'git failed');
-    }
-    return result;
-  });
-
-  ipcMain.handle('watchfox:relaunch', () => {
-    app.relaunch();
-    app.exit(0);
-  });
-}
 
 function isPackaged() {
   return app.isPackaged;
@@ -370,7 +249,6 @@ function createWindow(loadUrl) {
       minHeight: 480,
       show: false,
       webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,
@@ -428,7 +306,6 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     try {
-      registerGitIpc();
       let url;
       if (isDevOnly) {
         url = DEV_URL;
