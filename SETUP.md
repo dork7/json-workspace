@@ -86,7 +86,7 @@ npm run electron:pack
 
 The production server is started with the Electron binary in Node mode (`ELECTRON_RUN_AS_NODE`), so end users do **not** need a separate Node.js install for the packaged app.
 
-**Update from GitHub** — When you run Electron from a **git clone** (e.g. `npm run electron:dev` or `npm run electron` from the repo root), the sidebar shows **Update from GitHub**. That runs `git pull origin master`, or `origin/main` if `master` does not exist on the remote. You need **git** on your `PATH` and remotes configured. Packaged installers usually do **not** include a `.git` folder, so this control is hidden there. Override the repo directory with `WATCHFOX_GIT_ROOT` if needed. After a successful pull, use **Restart app** in the toast (or quit and reopen) so the Next.js server and UI reload.
+**Update from GitHub** — In the Electron app the sidebar shows **Update from GitHub** whenever you’re not in a plain browser. It runs `git pull origin master`, or `origin/main` if needed. That only succeeds when Watchfox can find a folder containing **`.git`**: usually the repo root next to `electron/` when you run from a clone, **`WATCHFOX_GIT_ROOT`**, or **`process.cwd()`** (e.g. launching the binary from inside your clone). **Packaged installers (DMG, etc.) don’t bundle `.git`**—the button still appears; set `WATCHFOX_GIT_ROOT` to your clone and restart, or install a newer release from GitHub. You need **git** on `PATH`. After a successful pull, use **Restart app** in the toast so the bundled server picks up changes.
 
 ## 4. Production build and run
 
