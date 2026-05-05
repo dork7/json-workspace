@@ -1,20 +1,24 @@
-# Build the Electron app on macOS, Windows, and Linux.
+# Release the Electron app to GitHub Releases when code is merged into `main`
+# (or `master`). Versioning follows `package.json` — bump the version before
+# merging the PR you want to release.
 #
-# - Push to `master` or `main` — including when a PR is merged into that branch
-#   (GitHub emits a push event for the merge commit). Builds and uploads artifacts.
-# - Publish a GitHub Release: build and attach installers to that release.
-# - Manual run: same as push (artifacts only).
+# Flow:
+#   1. `check` reads the version from `package.json` and skips if a release
+#      with tag `v<version>` already exists (so re-merging without a version
+#      bump is a no-op).
+#   2. `build` runs on macOS / Windows / Linux. Each runner builds the Next.js
+#      standalone bundle, packages with `electron-builder`, and publishes the
+#      installers to a *draft* GitHub Release tagged `v<version>`.
+#   3. `publish` promotes the draft to a published release and marks it latest.
 #
-# Required repo setting for Release uploads: Settings → Actions → General →
-# Workflow permissions → "Read and write permissions".
+# Required: Settings → Actions → General → Workflow permissions →
+# "Read and write permissions" (so `GITHUB_TOKEN` can create/edit releases).
 
 name: Electron release
 
 on:
   push:
-    branches: [master, main]
-  release:
-    types: [published]
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -22,14 +26,49 @@ permissions:
 
 concurrency:
   group: electron-release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 defaults:
   run:
     shell: bash
 
 jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      should_release: ${{ steps.gate.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read package.json version
+        id: version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to release
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists — skipping. Bump the version in package.json to publish a new release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Will release $tag."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    name: Build (${{ matrix.os }})
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -40,9 +79,7 @@ jobs:
             electron_args: --win
           - os: ubuntu-latest
             electron_args: --linux
-
     runs-on: ${{ matrix.os }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,23 +102,25 @@ jobs:
       - name: Build Next.js (standalone) for Electron
         run: npm run build
 
-      - name: Build & publish Electron to GitHub Release
-        if: github.event_name == 'release'
+      - name: Build & publish Electron installers (draft release)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Skip macOS code signing in CI (no certs configured).
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder ${{ matrix.electron_args }} --publish always
 
-      - name: Build Electron (no publish)
-        if: github.event_name != 'release'
+  publish:
+    name: Promote draft to published
+    needs: [check, build]
+    if: needs.check.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark release as published and latest
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder ${{ matrix.electron_args }} --publish never
-
-      - name: Upload build artifacts
-        if: github.event_name != 'release'
-        uses: actions/upload-artifact@v4
-        with:
-          name: watchfox-electron-${{ matrix.os }}
-          path: dist-electron/
-          if-no-files-found: error
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ needs.check.outputs.tag }}"
+          gh release edit "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest

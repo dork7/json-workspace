@@ -52,30 +52,6 @@ const WATCH_VALUE_MAX = 4000;
 
 type WatchEntry = { id: string; expr: string };
 
-type GitPullResult = {
-  ok: boolean;
-  stdout?: string;
-  stderr?: string;
-  error?: string;
-  code?: number | null;
-};
-
-declare global {
-  interface Window {
-    electron?: {
-      platform: string;
-      gitUpdateCapable?: () => Promise<{
-        capable: boolean;
-        hasRepo?: boolean;
-        packaged?: boolean;
-        repoRoot?: string;
-      }>;
-      pullFromGithubMaster?: () => Promise<GitPullResult>;
-      relaunchApp?: () => Promise<void>;
-    };
-  }
-}
-
 function formatWatchDisplay(v: unknown): string {
   if (v === undefined) return '(undefined)';
   try {
@@ -141,10 +117,6 @@ export function JsonWorkspace() {
   const [watchInput, setWatchInput] = useState('');
   const [busyAction, setBusyAction] = useState<'format' | 'minify' | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
-  const [electronGitPanel, setElectronGitPanel] = useState(false);
-  const [electronGitHasRepo, setElectronGitHasRepo] = useState(false);
-  const [electronGitPackaged, setElectronGitPackaged] = useState(false);
-  const [gitPullBusy, setGitPullBusy] = useState(false);
 
   const editorViewRef = useRef<EditorView | null>(null);
   const watchInputRef = useRef<HTMLInputElement>(null);
@@ -227,31 +199,6 @@ export function JsonWorkspace() {
 
   useEffect(() => {
     migrateWorkspaceStorageKeys();
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const api =
-        typeof window !== 'undefined' ? window.electron : undefined;
-      if (!api?.gitUpdateCapable) {
-        if (!cancelled) setElectronGitPanel(false);
-        return;
-      }
-      try {
-        const r = await api.gitUpdateCapable();
-        if (!cancelled) {
-          setElectronGitPanel(Boolean(r?.capable));
-          setElectronGitHasRepo(Boolean(r?.hasRepo));
-          setElectronGitPackaged(Boolean(r?.packaged));
-        }
-      } catch {
-        if (!cancelled) setElectronGitPanel(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
@@ -842,46 +789,6 @@ export function JsonWorkspace() {
     setCompareOpen(true);
   };
 
-  const pullUpdatesFromGithub = useCallback(async () => {
-    const pull = window.electron?.pullFromGithubMaster;
-    if (!pull) return;
-    setGitPullBusy(true);
-    try {
-      const res = await pull();
-      if (res.ok) {
-        const detail = [res.stdout, res.stderr]
-          .filter(Boolean)
-          .join('\n')
-          .trim();
-        toast.success('Updated from GitHub', {
-          description:
-            detail.slice(0, 380) ||
-            'Latest changes pulled. Restart the app to load new code.',
-          duration: 12_000,
-          action: window.electron?.relaunchApp
-            ? {
-                label: 'Restart app',
-                onClick: () => {
-                  void window.electron?.relaunchApp?.();
-                },
-              }
-            : undefined,
-        });
-      } else {
-        toast.error(res.error ?? 'Git pull failed', {
-          description: [res.stderr, res.stdout]
-            .filter(Boolean)
-            .join('\n')
-            .slice(0, 480),
-        });
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Update failed');
-    } finally {
-      setGitPullBusy(false);
-    }
-  }, []);
-
   const findStatus =
     findMatches.length === 0
       ? findQuery
@@ -1100,44 +1007,6 @@ export function JsonWorkspace() {
           </div>
         </details>
 
-        {electronGitPanel ? (
-          <div className="electron-git-update">
-            <button
-              type="button"
-              className="btn primary electron-git-update-btn"
-              disabled={gitPullBusy || !electronGitHasRepo}
-              title={
-                electronGitHasRepo
-                  ? 'git pull origin master (or main). Requires git on PATH with remotes configured.'
-                  : electronGitPackaged
-                    ? 'Packaged app has no bundled repo. Set WATCHFOX_GIT_ROOT to your clone and restart, or install a newer GitHub release.'
-                    : 'No .git folder found. Run from your clone or set WATCHFOX_GIT_ROOT.'
-              }
-              onClick={() => void pullUpdatesFromGithub()}
-            >
-              {gitPullBusy ? 'Updating…' : 'Update from GitHub'}
-            </button>
-            <p className="electron-git-update-hint muted">
-              {electronGitHasRepo ? (
-                <>
-                  Pulls <code>origin/master</code>, or <code>main</code> if
-                  master is missing.
-                </>
-              ) : electronGitPackaged ? (
-                <>
-                  DMG/install builds don’t include <code>.git</code>. Set env{' '}
-                  <code>WATCHFOX_GIT_ROOT</code> to your local clone (then
-                  restart), or download a newer release from GitHub.
-                </>
-              ) : (
-                <>
-                  No <code>.git</code> detected. Use a git checkout or{' '}
-                  <code>WATCHFOX_GIT_ROOT</code>.
-                </>
-              )}
-            </p>
-          </div>
-        ) : null}
       </aside>
 
       <div

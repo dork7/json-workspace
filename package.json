@@ -90,7 +90,10 @@
       "maintainer": "Watchfox <hamzameh122@gmail.com>"
     },
     "publish": {
-      "provider": "github"
+      "provider": "github",
+      "owner": "dork7",
+      "repo": "json-workspace",
+      "releaseType": "draft"
     }
   }
 }
