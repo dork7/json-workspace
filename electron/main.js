@@ -24,13 +24,38 @@ let serverProcess = null;
 let isShuttingDown = false;
 
 function findGitRepoRoot() {
-  const fromScript = path.resolve(__dirname, '..');
-  if (fs.existsSync(path.join(fromScript, '.git'))) {
-    return fromScript;
+  const seen = new Set();
+  const dirs = [];
+
+  function add(p) {
+    if (!p || typeof p !== 'string') return;
+    let resolved;
+    try {
+      resolved = path.resolve(p);
+    } catch {
+      return;
+    }
+    if (seen.has(resolved)) return;
+    seen.add(resolved);
+    dirs.push(resolved);
   }
+
+  add(path.join(__dirname, '..'));
   if (process.env.WATCHFOX_GIT_ROOT) {
-    const r = path.resolve(process.env.WATCHFOX_GIT_ROOT);
-    if (fs.existsSync(path.join(r, '.git'))) return r;
+    add(process.env.WATCHFOX_GIT_ROOT);
+  }
+  try {
+    add(process.cwd());
+  } catch {
+    /* ignore */
+  }
+
+  for (const dir of dirs) {
+    try {
+      if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    } catch {
+      /* ignore */
+    }
   }
   return null;
 }
@@ -73,16 +98,24 @@ function gitPullOriginBranch(repoRoot, branch) {
 function registerGitIpc() {
   ipcMain.handle('watchfox:git-update-capable', () => {
     const root = findGitRepoRoot();
-    return { capable: Boolean(root), repoRoot: root || undefined };
+    return {
+      /** Always true in Electron so the sidebar control is visible (incl. packaged builds). */
+      capable: true,
+      hasRepo: Boolean(root),
+      repoRoot: root || undefined,
+      packaged: app.isPackaged,
+    };
   });
 
   ipcMain.handle('watchfox:pull-github-master', async () => {
     const repoRoot = findGitRepoRoot();
     if (!repoRoot) {
+      const packagedHint = isPackaged()
+        ? 'Packaged Watchfox does not include a git repo. Either download a newer release from GitHub, or set WATCHFOX_GIT_ROOT to a local clone path (folder containing .git) and restart the app. Git must be on your PATH.'
+        : 'No git repository found. Run from your project clone, or set WATCHFOX_GIT_ROOT to the repo root.';
       return {
         ok: false,
-        error:
-          'No git repository found. Updates from GitHub only work when Watchfox is run from a source clone (not the packaged app). Set WATCHFOX_GIT_ROOT if your repo lives elsewhere.',
+        error: packagedHint,
       };
     }
 
