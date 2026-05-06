@@ -27,11 +27,14 @@ import { getTabLang } from '@/lib/tab-lang';
 import { getWatchRoot } from '@/lib/watch-root';
 import {
   CLOSED_TABS_STORAGE_KEY,
+  FOCUSED_WATCHES_STORAGE_KEY,
+  FOCUSED_WATCH_HEIGHTS_STORAGE_KEY,
   MAX_CLOSED_HISTORY,
   SIDEBAR_WIDTH_STORAGE_KEY,
   WORKSPACE_STORAGE_KEY,
   WATCH_STORAGE_KEY,
   migrateWorkspaceStorageKeys,
+  parseFocusedWatchHeights,
   type ClosedTabSnapshot,
   parseClosedHistory,
   parseWorkspace,
@@ -49,6 +52,16 @@ const WorkspaceEditor = dynamic(
 );
 
 const WATCH_VALUE_MAX = 4000;
+
+/** Custom MIME used when dragging a Watch list item onto the editor pane. */
+const WATCH_DRAG_MIME = 'application/x-watchfox-watch-id';
+
+function dragHasWatchPayload(dt: DataTransfer | null): boolean {
+  if (!dt) return false;
+  /** `types` is an array-like in modern browsers; cast for safe `includes` calls. */
+  const list: readonly string[] = Array.from(dt.types ?? []);
+  return list.includes(WATCH_DRAG_MIME);
+}
 
 type WatchEntry = { id: string; expr: string };
 
@@ -101,6 +114,18 @@ function clampSidebarWidth(px: number, viewportW: number): number {
   return Math.min(Math.max(Math.round(px), lo), hi);
 }
 
+/** Default and bounds for a single focused watch card's height (px). */
+const FOCUS_CARD_HEIGHT_DEFAULT = 240;
+const FOCUS_CARD_HEIGHT_MIN = 120;
+const FOCUS_CARD_HEIGHT_MAX = 900;
+
+function clampFocusCardHeight(px: number): number {
+  return Math.min(
+    Math.max(Math.round(px), FOCUS_CARD_HEIGHT_MIN),
+    FOCUS_CARD_HEIGHT_MAX
+  );
+}
+
 export function JsonWorkspace() {
   const [tabs, setTabs] = useState<Tab[]>(() => [
     { id: 'tab-0', name: '', text: '{\n  \n}' },
@@ -115,8 +140,15 @@ export function JsonWorkspace() {
   const [findQuery, setFindQuery] = useState('');
   const [findMatchIndex, setFindMatchIndex] = useState(-1);
   const [watchInput, setWatchInput] = useState('');
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [suggestionHighlight, setSuggestionHighlight] = useState(-1);
   const [busyAction, setBusyAction] = useState<'format' | 'minify' | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
+  const [focusedWatchIds, setFocusedWatchIds] = useState<string[]>([]);
+  const [focusedWatchHeights, setFocusedWatchHeights] = useState<
+    Record<string, number>
+  >({});
+  const [editorDragOver, setEditorDragOver] = useState(false);
 
   const editorViewRef = useRef<EditorView | null>(null);
   const watchInputRef = useRef<HTMLInputElement>(null);
@@ -130,8 +162,12 @@ export function JsonWorkspace() {
   const nameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeIdRef = useRef(activeId);
   const sidebarWidthRef = useRef(sidebarWidth);
+  const focusedWatchHeightsRef = useRef(focusedWatchHeights);
+  /** Counts dragenter/dragleave so we don't flicker when the cursor crosses nested editor children. */
+  const editorDragDepthRef = useRef(0);
 
   sidebarWidthRef.current = sidebarWidth;
+  focusedWatchHeightsRef.current = focusedWatchHeights;
 
   activeIdRef.current = activeId;
 
@@ -150,13 +186,37 @@ export function JsonWorkspace() {
     if (!watchRoot.ok) return [] as string[];
     const out: string[] = [];
     collectJsonPaths(watchRoot.value, '', out);
-    return [...new Set(out)].sort((a, b) => a.localeCompare(b));
+    /** Hide noisy root branches we never want to suggest. Matches `actions`/`dictionary`/`definitions` and any nested path under them (e.g. `dictionary.foo`, `actions[0]`, `definitions.bar`). */
+    const HIDDEN_ROOTS = /^(?:actions|dictionary|definitions)(?:$|[.[])/;
+    return [...new Set(out)]
+      .filter((p) => !HIDDEN_ROOTS.test(p))
+      .sort((a, b) => a.localeCompare(b));
   }, [watchRoot]);
 
-  const pathSuggestionsSet = useMemo(
-    () => new Set(pathSuggestions),
-    [pathSuggestions]
+  const filteredSuggestions = useMemo(() => {
+    const q = watchInput.trim().toLowerCase();
+    const list = q
+      ? pathSuggestions.filter((p) => p.toLowerCase().includes(q))
+      : pathSuggestions;
+    return list.slice(0, 50);
+  }, [pathSuggestions, watchInput]);
+
+  const focusedWatchSet = useMemo(
+    () => new Set(focusedWatchIds),
+    [focusedWatchIds]
   );
+
+  /** Pinned watch entries in the order they were pinned, filtered to existing ones. */
+  const focusedWatchEntries = useMemo(() => {
+    if (focusedWatchIds.length === 0) return [] as WatchEntry[];
+    const byId = new Map(watchEntries.map((w) => [w.id, w]));
+    const out: WatchEntry[] = [];
+    for (const id of focusedWatchIds) {
+      const w = byId.get(id);
+      if (w) out.push(w);
+    }
+    return out;
+  }, [focusedWatchIds, watchEntries]);
 
   const findMatches = useMemo(() => {
     if (!findQuery) return [] as { start: number; end: number }[];
@@ -201,22 +261,12 @@ export function JsonWorkspace() {
     migrateWorkspaceStorageKeys();
   }, []);
 
+  /** Keep the highlighted suggestion in range as the filtered list shrinks. */
   useEffect(() => {
-    const el = watchInputRef.current;
-    if (!el) return;
-    /** Native `change` fires when a datalist option is chosen (React `onChange` maps to `input`, so it misses this). */
-    const onSuggestionCommitted = () => {
-      const expr = el.value.trim();
-      if (!expr || !pathSuggestionsSet.has(expr)) return;
-      setWatchEntries((w) => {
-        if (w.some((x) => x.expr === expr)) return w;
-        return [...w, { id: uid(), expr }];
-      });
-      setWatchInput('');
-    };
-    el.addEventListener('change', onSuggestionCommitted);
-    return () => el.removeEventListener('change', onSuggestionCommitted);
-  }, [pathSuggestionsSet]);
+    setSuggestionHighlight((i) =>
+      i >= filteredSuggestions.length ? filteredSuggestions.length - 1 : i
+    );
+  }, [filteredSuggestions]);
 
   useEffect(() => {
     try {
@@ -282,6 +332,29 @@ export function JsonWorkspace() {
           setSidebarWidth(clampSidebarWidth(n, window.innerWidth));
         }
       }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const raw = localStorage.getItem(FOCUSED_WATCHES_STORAGE_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw) as unknown;
+        if (Array.isArray(arr)) {
+          const ids = arr.filter((x): x is string => typeof x === 'string');
+          if (ids.length) setFocusedWatchIds(ids);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const raw = localStorage.getItem(FOCUSED_WATCH_HEIGHTS_STORAGE_KEY);
+      const map = parseFocusedWatchHeights(raw);
+      const cleaned: Record<string, number> = {};
+      for (const [id, h] of Object.entries(map)) {
+        cleaned[id] = clampFocusCardHeight(h);
+      }
+      setFocusedWatchHeights(cleaned);
     } catch {
       /* ignore */
     }
@@ -364,6 +437,54 @@ export function JsonWorkspace() {
     }, 400);
     return () => clearTimeout(t);
   }, [sidebarWidth, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(
+        FOCUSED_WATCHES_STORAGE_KEY,
+        JSON.stringify(focusedWatchIds)
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [focusedWatchIds, hydrated]);
+
+  /** Drop pinned IDs that no longer reference an existing watch entry. */
+  useEffect(() => {
+    setFocusedWatchIds((prev) => {
+      const valid = new Set(watchEntries.map((w) => w.id));
+      const next = prev.filter((id) => valid.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [watchEntries]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          FOCUSED_WATCH_HEIGHTS_STORAGE_KEY,
+          JSON.stringify(focusedWatchHeights)
+        );
+      } catch {
+        /* ignore */
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [focusedWatchHeights, hydrated]);
+
+  /** Forget custom heights for cards that are no longer pinned. */
+  useEffect(() => {
+    setFocusedWatchHeights((prev) => {
+      const keep = new Set(focusedWatchIds);
+      const keys = Object.keys(prev);
+      if (keys.every((k) => keep.has(k))) return prev;
+      const next: Record<string, number> = {};
+      for (const k of keys) if (keep.has(k)) next[k] = prev[k];
+      return next;
+    });
+  }, [focusedWatchIds]);
 
   useEffect(() => {
     const onResize = () => {
@@ -618,15 +739,19 @@ export function JsonWorkspace() {
     if (view) unfoldAll(view);
   }, []);
 
-  const addWatch = () => {
-    const expr = watchInput.trim();
+  const addWatchExpr = useCallback((rawExpr: string) => {
+    const expr = rawExpr.trim();
     if (!expr) return;
     setWatchEntries((w) => {
       if (w.some((x) => x.expr === expr)) return w;
       return [...w, { id: uid(), expr }];
     });
     setWatchInput('');
-  };
+    setSuggestionsOpen(false);
+    setSuggestionHighlight(-1);
+  }, []);
+
+  const addWatch = () => addWatchExpr(watchInput);
 
   const addWatchFromDocLineStart = useCallback(
     (docLineStart: number) => {
@@ -669,6 +794,134 @@ export function JsonWorkspace() {
   const clearAllWatches = useCallback(() => {
     setWatchEntries([]);
   }, []);
+
+  const focusWatchById = useCallback((id: string) => {
+    setFocusedWatchIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  }, []);
+
+  const unfocusWatch = useCallback((id: string) => {
+    setFocusedWatchIds((prev) => prev.filter((x) => x !== id));
+  }, []);
+
+  const clearAllFocusedWatches = useCallback(() => {
+    setFocusedWatchIds([]);
+  }, []);
+
+  const onWatchItemDragStart = useCallback(
+    (e: React.DragEvent<HTMLLIElement>, id: string) => {
+      /**
+       * Only attach the custom MIME — no `text/plain`. CodeMirror is a drop
+       * target inside `.editor-section`, and a `text/plain` payload would be
+       * pasted into the document if our capture-phase intercept ever missed.
+       */
+      e.dataTransfer.setData(WATCH_DRAG_MIME, id);
+      e.dataTransfer.effectAllowed = 'copy';
+    },
+    []
+  );
+
+  /**
+   * Drag/drop handlers run in **capture** phase so CodeMirror's own drop
+   * listener (registered on inner DOM nodes) never sees a Watch drag.
+   * We call `stopPropagation` (and `stopImmediatePropagation` on the native
+   * event) so the event terminates at `.editor-section`.
+   */
+  const onEditorDragEnterCapture = useCallback(
+    (e: React.DragEvent<HTMLElement>) => {
+      if (!dragHasWatchPayload(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
+      editorDragDepthRef.current += 1;
+      if (editorDragDepthRef.current === 1) setEditorDragOver(true);
+    },
+    []
+  );
+
+  const onEditorDragOverCapture = useCallback(
+    (e: React.DragEvent<HTMLElement>) => {
+      if (!dragHasWatchPayload(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
+      e.dataTransfer.dropEffect = 'copy';
+    },
+    []
+  );
+
+  const onEditorDragLeaveCapture = useCallback(
+    (e: React.DragEvent<HTMLElement>) => {
+      if (!dragHasWatchPayload(e.dataTransfer)) return;
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
+      editorDragDepthRef.current = Math.max(
+        0,
+        editorDragDepthRef.current - 1
+      );
+      if (editorDragDepthRef.current === 0) setEditorDragOver(false);
+    },
+    []
+  );
+
+  const onEditorDropCapture = useCallback(
+    (e: React.DragEvent<HTMLElement>) => {
+      if (!dragHasWatchPayload(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
+      const id = e.dataTransfer.getData(WATCH_DRAG_MIME);
+      editorDragDepthRef.current = 0;
+      setEditorDragOver(false);
+      if (id) focusWatchById(id);
+    },
+    [focusWatchById]
+  );
+
+  const onFocusCardResizerPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>, id: string) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const pointerId = e.pointerId;
+      const startY = e.clientY;
+      const startH =
+        focusedWatchHeightsRef.current[id] ?? FOCUS_CARD_HEIGHT_DEFAULT;
+
+      const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        const next = clampFocusCardHeight(startH + (ev.clientY - startY));
+        setFocusedWatchHeights((prev) =>
+          prev[id] === next ? prev : { ...prev, [id]: next }
+        );
+      };
+      const onUp = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        document.body.classList.remove('is-resizing-focus-card');
+      };
+
+      document.body.classList.add('is-resizing-focus-card');
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    },
+    []
+  );
+
+  const onFocusCardResizerKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>, id: string) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const delta = e.key === 'ArrowDown' ? 16 : -16;
+      setFocusedWatchHeights((prev) => {
+        const cur = prev[id] ?? FOCUS_CARD_HEIGHT_DEFAULT;
+        const next = clampFocusCardHeight(cur + delta);
+        return prev[id] === next ? prev : { ...prev, [id]: next };
+      });
+    },
+    []
+  );
 
   const onSidebarResizerPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -798,6 +1051,256 @@ export function JsonWorkspace() {
         ? `${findMatches.length} match${findMatches.length === 1 ? '' : 'es'} · Enter`
         : `${findMatchIndex + 1} / ${findMatches.length}`;
 
+  const evaluateWatch = (expr: string): { display: string; err: boolean } => {
+    if (!watchRoot.ok) {
+      return {
+        err: true,
+        display:
+          activeLang === 'json'
+            ? `Invalid JSON: ${watchRoot.error}`
+            : `Parse error: ${watchRoot.error}`,
+      };
+    }
+    const res = getPathValue(watchRoot.value, expr);
+    if (!res.ok) {
+      return { err: true, display: res.error ?? 'Path error' };
+    }
+    return { err: false, display: formatWatchDisplay(res.value) };
+  };
+
+  const watchPanel = (
+    <div className="watch-panel">
+      <div className="watch-panel-head">
+        <h2 className="watch-heading">Watch</h2>
+        <div className="watch-panel-head-actions">
+          <button
+            type="button"
+            className="btn ghost watch-clear-all"
+            disabled={watchEntries.length === 0}
+            title="Remove all watch expressions"
+            onClick={clearAllWatches}
+          >
+            Clear all
+          </button>
+        </div>
+      </div>
+      <p className="watch-hint">
+        Paths from root, e.g. <code>user</code>, <code>items[0]</code>,{' '}
+        <code>["key-name"]</code>. Choosing a suggestion adds it to the list.
+      </p>
+      <div className="watch-add-wrap">
+        <div className="watch-add">
+          <input
+            ref={watchInputRef}
+            type="text"
+            className="watch-input"
+            placeholder="path…"
+            autoComplete="off"
+            spellCheck={false}
+            value={watchInput}
+            role="combobox"
+            aria-expanded={
+              suggestionsOpen && filteredSuggestions.length > 0
+            }
+            aria-controls="watch-suggestions-list"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              suggestionHighlight >= 0 &&
+              filteredSuggestions[suggestionHighlight]
+                ? `watch-suggestion-${suggestionHighlight}`
+                : undefined
+            }
+            onFocus={() => setSuggestionsOpen(true)}
+            onChange={(e) => {
+              setWatchInput(e.target.value);
+              setSuggestionsOpen(true);
+              setSuggestionHighlight(-1);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (
+                  suggestionsOpen &&
+                  suggestionHighlight >= 0 &&
+                  filteredSuggestions[suggestionHighlight]
+                ) {
+                  addWatchExpr(filteredSuggestions[suggestionHighlight]);
+                } else {
+                  addWatch();
+                }
+              } else if (e.key === 'ArrowDown') {
+                if (filteredSuggestions.length === 0) return;
+                e.preventDefault();
+                setSuggestionsOpen(true);
+                setSuggestionHighlight((i) =>
+                  Math.min(filteredSuggestions.length - 1, i + 1)
+                );
+              } else if (e.key === 'ArrowUp') {
+                if (filteredSuggestions.length === 0) return;
+                e.preventDefault();
+                setSuggestionsOpen(true);
+                setSuggestionHighlight((i) =>
+                  Math.max(0, (i < 0 ? filteredSuggestions.length : i) - 1)
+                );
+              } else if (e.key === 'Escape') {
+                if (suggestionsOpen) {
+                  e.preventDefault();
+                  setSuggestionsOpen(false);
+                }
+              }
+            }}
+            onBlur={() => {
+              /** Defer so a click on a suggestion (mousedown → blur → click) registers. */
+              window.setTimeout(() => setSuggestionsOpen(false), 120);
+            }}
+          />
+          <button type="button" className="btn" onClick={addWatch}>
+            Add
+          </button>
+        </div>
+        {suggestionsOpen && filteredSuggestions.length > 0 ? (
+          <ul
+            id="watch-suggestions-list"
+            className="watch-suggestions"
+            role="listbox"
+            aria-label="Path suggestions"
+          >
+            {filteredSuggestions.map((s, i) => (
+              <li
+                key={s}
+                id={`watch-suggestion-${i}`}
+                role="option"
+                aria-selected={i === suggestionHighlight}
+                className={`watch-suggestion${
+                  i === suggestionHighlight ? ' is-active' : ''
+                }`}
+                /** mousedown fires before the input blurs; preventDefault keeps focus. */
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  addWatchExpr(s);
+                }}
+                onMouseEnter={() => setSuggestionHighlight(i)}
+              >
+                {s}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+      <ul className="watch-list">
+        {watchEntries.map((w) => {
+          const { display, err } = evaluateWatch(w.expr);
+          const focused = focusedWatchSet.has(w.id);
+          return (
+            <li
+              key={w.id}
+              className={`watch-item${focused ? ' is-pinned' : ''}`}
+              draggable
+              onDragStart={(e) => onWatchItemDragStart(e, w.id)}
+              title="Drag onto the editor to pin this watch alongside"
+            >
+              <div className="watch-expr">
+                <code>{w.expr}</code>
+                <div className="watch-item-actions">
+                  {focused ? (
+                    <span
+                      className="watch-pinned-mark"
+                      aria-label="Pinned alongside editor"
+                      title="Pinned alongside editor"
+                    >
+                      ●
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="watch-remove"
+                    aria-label="Remove watch"
+                    onClick={() => removeWatch(w.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+              <pre className={`watch-value${err ? ' watch-err' : ''}`}>{display}</pre>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+
+  const focusedWatchPanel =
+    focusedWatchEntries.length === 0 ? null : (
+      <div className="editor-focus-stack" aria-label="Focused watches">
+        <div className="editor-focus-stack-head">
+          <h2 className="editor-focus-stack-heading">Focused</h2>
+          <button
+            type="button"
+            className="btn ghost editor-focus-stack-clear"
+            title="Close all focused watches"
+            onClick={clearAllFocusedWatches}
+          >
+            Close all
+          </button>
+        </div>
+        {focusedWatchEntries.map((w) => {
+          const { display, err } = evaluateWatch(w.expr);
+          const height =
+            focusedWatchHeights[w.id] ?? FOCUS_CARD_HEIGHT_DEFAULT;
+          return (
+            <article
+              key={w.id}
+              className="editor-focus-card"
+              /**
+               * `flex-basis` is the preferred height. Cards have `flex-grow: 1`
+               * (in CSS) so they expand to fill the remaining dock height —
+               * a single pinned watch covers the full available area; multiple
+               * cards share the space proportionally based on their bases.
+               */
+              style={{ flexBasis: `${height}px` }}
+            >
+              <header className="editor-focus-card-head">
+                <code className="editor-focus-card-expr" title={w.expr}>
+                  {w.expr}
+                </code>
+                <button
+                  type="button"
+                  className="editor-focus-card-close"
+                  aria-label={`Close focused view for ${w.expr}`}
+                  title="Close focused view"
+                  onClick={() => unfocusWatch(w.id)}
+                >
+                  ×
+                </button>
+              </header>
+              <pre
+                className={`editor-focus-card-value${err ? ' watch-err' : ''}`}
+              >
+                {display}
+              </pre>
+              <div
+                className="editor-focus-card-resizer"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label={`Resize focused view for ${w.expr}`}
+                tabIndex={0}
+                aria-valuemin={FOCUS_CARD_HEIGHT_MIN}
+                aria-valuemax={FOCUS_CARD_HEIGHT_MAX}
+                aria-valuenow={Math.round(height)}
+                title="Drag to resize · ↑/↓ to nudge"
+                onPointerDown={(e) =>
+                  onFocusCardResizerPointerDown(e, w.id)
+                }
+                onKeyDown={(e) => onFocusCardResizerKeyDown(e, w.id)}
+              >
+                <span className="editor-focus-card-resizer-grip" aria-hidden />
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    );
+
   return (
     <div
       className="app"
@@ -810,88 +1313,7 @@ export function JsonWorkspace() {
           <h1 className="sidebar-title">Watchfox</h1>
         </div>
 
-        <div className="watch-panel">
-          <div className="watch-panel-head">
-            <h2 className="watch-heading">Watch</h2>
-            <button
-              type="button"
-              className="btn ghost watch-clear-all"
-              disabled={watchEntries.length === 0}
-              title="Remove all watch expressions"
-              onClick={clearAllWatches}
-            >
-              Clear all
-            </button>
-          </div>
-          <p className="watch-hint">
-            Paths from root, e.g. <code>user</code>, <code>items[0]</code>,{' '}
-            <code>["key-name"]</code>. Choosing a suggestion adds it to the list.
-          </p>
-          <div className="watch-add">
-            <input
-              ref={watchInputRef}
-              type="text"
-              className="watch-input"
-              list="watch-datalist"
-              placeholder="path…"
-              autoComplete="off"
-              spellCheck={false}
-              value={watchInput}
-              onChange={(e) => setWatchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  addWatch();
-                }
-              }}
-            />
-            <datalist id="watch-datalist">
-              {pathSuggestions.map((p) => (
-                <option key={p} value={p} />
-              ))}
-            </datalist>
-            <button type="button" className="btn" onClick={addWatch}>
-              Add
-            </button>
-          </div>
-          <ul className="watch-list">
-            {watchEntries.map((w) => {
-              let display = '';
-              let err = false;
-              if (!watchRoot.ok) {
-                err = true;
-                display =
-                  activeLang === 'json'
-                    ? `Invalid JSON: ${watchRoot.error}`
-                    : `Parse error: ${watchRoot.error}`;
-              } else {
-                const res = getPathValue(watchRoot.value, w.expr);
-                if (!res.ok) {
-                  err = true;
-                  display = res.error ?? 'Path error';
-                } else {
-                  display = formatWatchDisplay(res.value);
-                }
-              }
-              return (
-                <li key={w.id} className="watch-item">
-                  <div className="watch-expr">
-                    <code>{w.expr}</code>
-                    <button
-                      type="button"
-                      className="watch-remove"
-                      aria-label="Remove watch"
-                      onClick={() => removeWatch(w.id)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <pre className={`watch-value${err ? ' watch-err' : ''}`}>{display}</pre>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+        {watchPanel}
 
         <div className="sidebar-new-tab">
           <button type="button" className="btn primary" onClick={newTab}>
@@ -1128,10 +1550,28 @@ export function JsonWorkspace() {
           </div>
         </header>
 
-        <section
-          className={`editor-section${compareOpen ? ' hidden' : ''}`}
-          aria-label="Editor"
+        <div
+          className={`editor-row${
+            focusedWatchEntries.length > 0 && !compareOpen
+              ? ' has-watch-dock'
+              : ''
+          }${compareOpen ? ' hidden' : ''}`}
         >
+        <section
+          className={`editor-section${editorDragOver ? ' is-drop-target' : ''}`}
+          aria-label="Editor"
+          onDragEnterCapture={onEditorDragEnterCapture}
+          onDragOverCapture={onEditorDragOverCapture}
+          onDragLeaveCapture={onEditorDragLeaveCapture}
+          onDropCapture={onEditorDropCapture}
+        >
+          {editorDragOver ? (
+            <div className="editor-drop-overlay" aria-hidden>
+              <div className="editor-drop-overlay-card">
+                Drop to pin watch alongside the editor
+              </div>
+            </div>
+          ) : null}
           <div className="editor-pane">
             <div className="editor-code-root">
               {activeBookmarksSanitized.length > 0 ? (
@@ -1206,6 +1646,16 @@ export function JsonWorkspace() {
             </div>
           </div>
         </section>
+
+          {focusedWatchEntries.length > 0 && !compareOpen ? (
+            <aside
+              className="editor-watch-dock"
+              aria-label="Focused watches alongside editor"
+            >
+              {focusedWatchPanel}
+            </aside>
+          ) : null}
+        </div>
 
         <section
           className={`compare-section${compareOpen ? '' : ' hidden'}`}

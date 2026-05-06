@@ -7,6 +7,30 @@ export const CLOSED_TABS_STORAGE_KEY = 'watchfox-closed-tabs-v1';
 export const WATCH_STORAGE_KEY = 'watchfox-watch-v1';
 /** Sidebar width in px (desktop layout only) */
 export const SIDEBAR_WIDTH_STORAGE_KEY = 'watchfox-sidebar-width-v1';
+/** IDs of watch entries pinned alongside the editor for focused viewing */
+export const FOCUSED_WATCHES_STORAGE_KEY = 'watchfox-focused-watches-v1';
+/** Per-pinned-watch card height (px) inside the focus dock, keyed by watch entry id */
+export const FOCUSED_WATCH_HEIGHTS_STORAGE_KEY =
+  'watchfox-focused-watch-heights-v1';
+
+export function parseFocusedWatchHeights(
+  raw: string | null
+): Record<string, number> {
+  if (!raw) return {};
+  try {
+    const data = JSON.parse(raw) as unknown;
+    if (!data || typeof data !== 'object') return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+      if (typeof k !== 'string') continue;
+      const n = typeof v === 'number' ? v : Number.NaN;
+      if (Number.isFinite(n) && n > 0) out[k] = Math.round(n);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 const LEGACY_KEYS = {
   workspace: 'json-workspace-workspace-v1',
