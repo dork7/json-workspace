@@ -69,7 +69,11 @@ const watchfoxTheme = EditorView.theme({
     overflow: 'auto',
   },
   '.cm-content': {
-    caretColor: 'var(--accent)',
+    caretColor: '#ffffff',
+  },
+  /** CodeMirror's `drawSelection` extension renders the caret as a 1.2px left border on `.cm-cursor`. */
+  '.cm-cursor, .cm-dropCursor': {
+    borderLeftColor: '#ffffff',
   },
   '.cm-gutters': {
     backgroundColor: 'color-mix(in srgb, var(--surface) 85%, var(--bg))',
@@ -174,8 +178,27 @@ export default function WorkspaceEditor({
         ? json()
         : javascript({ typescript: lang === 'typescript' });
 
+    /**
+     * Replace CodeMirror's default word-selection on double-click with a
+     * full-document select. CM detects multi-click via `mousedown` events
+     * whose `.detail` is 2 (double) or 3 (triple) — we preempt the 2-click
+     * case so word-selection never runs.
+     */
+    const selectAllOnDoubleClick = EditorView.domEventHandlers({
+      mousedown(event, view) {
+        if (event.detail !== 2 || event.button !== 0) return false;
+        event.preventDefault();
+        view.dispatch({
+          selection: { anchor: 0, head: view.state.doc.length },
+          scrollIntoView: false,
+        });
+        return true;
+      },
+    });
+
     return [
       watchfoxTheme,
+      selectAllOnDoubleClick,
       drawSelection(),
       ...bookmarkAwareLineNumbers(value, bookmarkAnchors, onBookmarkLineToggle),
       watchPlusGutter(onWatchLineAdd),

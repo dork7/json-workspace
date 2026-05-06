@@ -45,6 +45,7 @@ import {
 } from '@/lib/watch-extract-from-editor';
 import type { Tab, TabLanguage } from '@/lib/workspace-types';
 import { toast } from 'sonner';
+import { JsonTreeView } from '@/components/JsonTreeView';
 
 const WorkspaceEditor = dynamic(
   () => import('@/components/WorkspaceEditor'),
@@ -81,25 +82,88 @@ function formatWatchDisplay(v: unknown): string {
   }
 }
 
-function computeDiffLines(aText: string, bText: string): { left: string[]; right: string[] } {
+/** Full pretty-printed serialization of a watch value, no truncation — used for copy-to-clipboard. */
+function serializeWatchValue(v: unknown): string {
+  if (v === undefined) return '(undefined)';
+  try {
+    if (typeof v === 'function') return '[Function]';
+    return v !== null && typeof v === 'object'
+      ? JSON.stringify(v, null, 2)
+      : JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (
+      typeof navigator !== 'undefined' &&
+      typeof navigator.clipboard?.writeText === 'function'
+    ) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /** Fall through to legacy fallback below. */
+  }
+  /** Legacy fallback for non-secure contexts where the async clipboard API is unavailable. */
+  try {
+    if (typeof document === 'undefined') return false;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+type DiffLine = {
+  lineNo: number;
+  text: string;
+  /** True when this line differs from its counterpart on the other side. */
+  differs: boolean;
+  /** True when this side has no content for this row (the other side is longer). */
+  empty: boolean;
+};
+
+function computeDiffLines(
+  aText: string,
+  bText: string
+): { left: DiffLine[]; right: DiffLine[]; differCount: number } {
   const al = aText.split('\n');
   const bl = bText.split('\n');
   const n = Math.max(al.length, bl.length);
-  const left: string[] = [];
-  const right: string[] = [];
+  const left: DiffLine[] = [];
+  const right: DiffLine[] = [];
+  let differCount = 0;
   for (let i = 0; i < n; i++) {
     const la = al[i];
     const lb = bl[i];
-    if (la === lb) continue;
-    const lineNo = `L${i + 1}`;
-    left.push(`${lineNo}\t${la ?? ''}`);
-    right.push(`${lineNo}\t${lb ?? ''}`);
+    const differs = la !== lb;
+    if (differs) differCount++;
+    left.push({
+      lineNo: i + 1,
+      text: la ?? '',
+      differs,
+      empty: la === undefined,
+    });
+    right.push({
+      lineNo: i + 1,
+      text: lb ?? '',
+      differs,
+      empty: lb === undefined,
+    });
   }
-  if (left.length === 0) {
-    left.push('No differing lines.');
-    right.push('No differing lines.');
-  }
-  return { left, right };
+  return { left, right, differCount };
 }
 
 const SIDEBAR_WIDTH_DEFAULT = 280;
@@ -149,6 +213,8 @@ export function JsonWorkspace() {
     Record<string, number>
   >({});
   const [editorDragOver, setEditorDragOver] = useState(false);
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
 
   const editorViewRef = useRef<EditorView | null>(null);
   const watchInputRef = useRef<HTMLInputElement>(null);
@@ -307,6 +373,7 @@ export function JsonWorkspace() {
       );
       if (w) {
         const tabsFixed = w.tabs.map((t) => {
+          if (t.nameLocked) return t;
           const n = deriveTabLabel(t.text, getTabLang(t));
           if (n !== null && t.name !== n) return { ...t, name: n };
           return t;
@@ -370,6 +437,7 @@ export function JsonWorkspace() {
         const idx = prev.findIndex((t) => t.id === id);
         if (idx === -1) return prev;
         const tab = prev[idx];
+        if (tab.nameLocked) return prev;
         const name = deriveTabLabel(tab.text, getTabLang(tab));
         if (name === null || tab.name === name) return prev;
         const next = [...prev];
@@ -605,6 +673,7 @@ export function JsonWorkspace() {
         ...(closing.langAuto === false
           ? { langAuto: false as const, lang: closing.lang ?? 'json' }
           : { langAuto: true as const }),
+        ...(closing.nameLocked ? { nameLocked: true as const } : {}),
       };
       return [snap, ...prev].slice(0, MAX_CLOSED_HISTORY);
     });
@@ -630,6 +699,7 @@ export function JsonWorkspace() {
         ...(manual
           ? { langAuto: false, lang: snap.lang ?? 'json' }
           : { langAuto: true }),
+        ...(snap.nameLocked ? { nameLocked: true } : {}),
       },
     ]);
     setActiveId(newId);
@@ -647,6 +717,66 @@ export function JsonWorkspace() {
     setActiveId(id);
     setFindQuery('');
   };
+
+  const startRenameTab = useCallback(
+    (id: string) => {
+      const tab = tabs.find((t) => t.id === id);
+      if (!tab) return;
+      setRenamingTabId(id);
+      setRenameDraft(tab.name);
+    },
+    [tabs]
+  );
+
+  const cancelRenameTab = useCallback(() => {
+    setRenamingTabId(null);
+    setRenameDraft('');
+  }, []);
+
+  /** Live-edit the active tab's name from the editor toolbar input. */
+  const setActiveTabName = useCallback((name: string) => {
+    const id = activeIdRef.current;
+    setTabs((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, name, nameLocked: true } : t))
+    );
+  }, []);
+
+  /** On blur/Enter, an empty name reverts to the auto-derived label. */
+  const commitActiveTabName = useCallback(() => {
+    const id = activeIdRef.current;
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t;
+        if (t.name.trim() !== '') return t;
+        const auto = deriveTabLabel(t.text, getTabLang(t)) ?? '';
+        const { nameLocked: _nameLocked, ...rest } = t;
+        return { ...rest, name: auto };
+      })
+    );
+  }, []);
+
+  const commitRenameTab = useCallback(() => {
+    const id = renamingTabId;
+    if (!id) return;
+    const draft = renameDraft.trim();
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t;
+        if (draft === '') {
+          /** Empty draft resets to auto-derived. Re-run derivation immediately. */
+          const auto = deriveTabLabel(t.text, getTabLang(t)) ?? '';
+          if (!t.nameLocked && t.name === auto) return t;
+          /** Strip `nameLocked` so future edits resume content-driven naming. */
+          const { nameLocked: _nameLocked, ...rest } = t;
+          return { ...rest, name: auto };
+        }
+        if (t.nameLocked && t.name === draft) return t;
+        return { ...t, name: draft, nameLocked: true };
+      })
+    );
+    setRenamingTabId(null);
+    setRenameDraft('');
+  }, [renamingTabId, renameDraft]);
 
   const setLanguageSelect = (value: string) => {
     setTabs((prev) =>
@@ -684,7 +814,8 @@ export function JsonWorkspace() {
       setTabs((prev) =>
         prev.map((t) => {
           if (t.id !== id) return t;
-          return name !== null ? { ...t, text: out, name } : { ...t, text: out };
+          if (t.nameLocked || name === null) return { ...t, text: out };
+          return { ...t, text: out, name };
         })
       );
     } catch {
@@ -719,7 +850,8 @@ export function JsonWorkspace() {
       setTabs((prev) =>
         prev.map((t) => {
           if (t.id !== id) return t;
-          return name !== null ? { ...t, text: out, name } : { ...t, text: out };
+          if (t.nameLocked || name === null) return { ...t, text: out };
+          return { ...t, text: out, name };
         })
       );
     } catch {
@@ -738,6 +870,51 @@ export function JsonWorkspace() {
     const view = editorViewRef.current;
     if (view) unfoldAll(view);
   }, []);
+
+  /**
+   * Double-click anywhere inside a focused-watch card's value pane (but not
+   * on its interactive controls — toggles, key buttons, the Copy/Close
+   * buttons) selects every visible character in that pane. Mirrors the
+   * editor's double-click-selects-all behaviour without the brief
+   * word-selection flash.
+   */
+  const onFocusCardMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.detail !== 2 || e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, textarea, select')) return;
+    e.preventDefault();
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(e.currentTarget);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+
+  const onCopyAll = async () => {
+    const text = activeTab.text;
+    if (text === '') {
+      toast.info('Nothing to copy — this tab is empty.');
+      return;
+    }
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      toast.success('Copied tab contents to clipboard.');
+    } else {
+      toast.error('Could not copy. Check your browser clipboard permissions.');
+    }
+  };
+
+  const onCopyFocusedWatch = async (expr: string) => {
+    const { value, err, display } = evaluateWatch(expr);
+    const text = err ? display : serializeWatchValue(value);
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      toast.success(err ? 'Copied error message.' : `Copied value of ${expr}.`);
+    } else {
+      toast.error('Could not copy. Check your browser clipboard permissions.');
+    }
+  };
 
   const addWatchExpr = useCallback((rawExpr: string) => {
     const expr = rawExpr.trim();
@@ -1000,7 +1177,13 @@ export function JsonWorkspace() {
   const compareDiff = useMemo(() => {
     const ta = tabs.find((t) => t.id === compareAId);
     const tb = tabs.find((t) => t.id === compareBId);
-    if (!ta || !tb) return { left: [] as string[], right: [] as string[] };
+    if (!ta || !tb) {
+      return {
+        left: [] as DiffLine[],
+        right: [] as DiffLine[],
+        differCount: 0,
+      };
+    }
     return computeDiffLines(
       displayTextForCompare(ta.text, getTabLang(ta)),
       displayTextForCompare(tb.text, getTabLang(tb))
@@ -1051,7 +1234,9 @@ export function JsonWorkspace() {
         ? `${findMatches.length} match${findMatches.length === 1 ? '' : 'es'} · Enter`
         : `${findMatchIndex + 1} / ${findMatches.length}`;
 
-  const evaluateWatch = (expr: string): { display: string; err: boolean } => {
+  const evaluateWatch = (
+    expr: string
+  ): { display: string; err: boolean; value: unknown } => {
     if (!watchRoot.ok) {
       return {
         err: true,
@@ -1059,13 +1244,22 @@ export function JsonWorkspace() {
           activeLang === 'json'
             ? `Invalid JSON: ${watchRoot.error}`
             : `Parse error: ${watchRoot.error}`,
+        value: undefined,
       };
     }
     const res = getPathValue(watchRoot.value, expr);
     if (!res.ok) {
-      return { err: true, display: res.error ?? 'Path error' };
+      return {
+        err: true,
+        display: res.error ?? 'Path error',
+        value: undefined,
+      };
     }
-    return { err: false, display: formatWatchDisplay(res.value) };
+    return {
+      err: false,
+      display: formatWatchDisplay(res.value),
+      value: res.value,
+    };
   };
 
   const watchPanel = (
@@ -1244,7 +1438,7 @@ export function JsonWorkspace() {
           </button>
         </div>
         {focusedWatchEntries.map((w) => {
-          const { display, err } = evaluateWatch(w.expr);
+          const { display, err, value } = evaluateWatch(w.expr);
           const height =
             focusedWatchHeights[w.id] ?? FOCUS_CARD_HEIGHT_DEFAULT;
           return (
@@ -1263,21 +1457,37 @@ export function JsonWorkspace() {
                 <code className="editor-focus-card-expr" title={w.expr}>
                   {w.expr}
                 </code>
-                <button
-                  type="button"
-                  className="editor-focus-card-close"
-                  aria-label={`Close focused view for ${w.expr}`}
-                  title="Close focused view"
-                  onClick={() => unfocusWatch(w.id)}
-                >
-                  ×
-                </button>
+                <div className="editor-focus-card-actions">
+                  <button
+                    type="button"
+                    className="editor-focus-card-copy"
+                    aria-label={`Copy value of ${w.expr}`}
+                    title="Copy value to clipboard"
+                    onClick={() => void onCopyFocusedWatch(w.expr)}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-focus-card-close"
+                    aria-label={`Close focused view for ${w.expr}`}
+                    title="Close focused view"
+                    onClick={() => unfocusWatch(w.id)}
+                  >
+                    ×
+                  </button>
+                </div>
               </header>
-              <pre
+              <div
                 className={`editor-focus-card-value${err ? ' watch-err' : ''}`}
+                onMouseDown={onFocusCardMouseDown}
               >
-                {display}
-              </pre>
+                {err ? (
+                  <pre className="editor-focus-card-error">{display}</pre>
+                ) : (
+                  <JsonTreeView value={value} highlight={findQuery} />
+                )}
+              </div>
               <div
                 className="editor-focus-card-resizer"
                 role="separator"
@@ -1322,33 +1532,63 @@ export function JsonWorkspace() {
         </div>
 
         <ul className="tab-list" role="tablist" aria-label="Open tabs">
-          {tabs.map((tab) => (
-            <li
-              key={tab.id}
-              className={`tab-item${tab.id === activeId ? ' active' : ''}`}
-              role="tab"
-              aria-selected={tab.id === activeId ? 'true' : 'false'}
-            >
-              <button
-                type="button"
-                className="tab-btn"
-                onClick={() => selectTab(tab.id)}
+          {tabs.map((tab) => {
+            const isRenaming = renamingTabId === tab.id;
+            return (
+              <li
+                key={tab.id}
+                className={`tab-item${tab.id === activeId ? ' active' : ''}${
+                  isRenaming ? ' is-renaming' : ''
+                }`}
+                role="tab"
+                aria-selected={tab.id === activeId ? 'true' : 'false'}
               >
-                {tab.name || '…'}
-              </button>
-              <button
-                type="button"
-                className="tab-close"
-                aria-label="Close tab"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(tab.id);
-                }}
-              >
-                ×
-              </button>
-            </li>
-          ))}
+                {isRenaming ? (
+                  <input
+                    autoFocus
+                    type="text"
+                    className="tab-rename-input"
+                    value={renameDraft}
+                    placeholder="Tab name (empty resets to auto)"
+                    aria-label={`Rename tab ${tab.name || tab.id}`}
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commitRenameTab();
+                      } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        cancelRenameTab();
+                      }
+                    }}
+                    onBlur={commitRenameTab}
+                    onFocus={(e) => e.currentTarget.select()}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="tab-btn"
+                    onClick={() => selectTab(tab.id)}
+                    onDoubleClick={() => startRenameTab(tab.id)}
+                    title={`${tab.name || tab.id} — double-click to rename`}
+                  >
+                    {tab.name || '…'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="tab-close"
+                  aria-label="Close tab"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTab(tab.id);
+                  }}
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
         </ul>
 
         <div className="compare-panel">
@@ -1502,6 +1742,15 @@ export function JsonWorkspace() {
             <button type="button" className="btn" onClick={onExpandAll}>
               Expand all
             </button>
+            <span className="toolbar-sep" aria-hidden />
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void onCopyAll()}
+              title="Copy the full contents of this tab to the clipboard"
+            >
+              Copy all
+            </button>
           </div>
           <div className="toolbar-search" id="toolbar-search">
             <label className="search-field">
@@ -1549,6 +1798,52 @@ export function JsonWorkspace() {
             <span className="muted">{findStatus}</span>
           </div>
         </header>
+
+        <div
+          className={`editor-filename-bar${compareOpen ? ' hidden' : ''}`}
+        >
+          <input
+            type="text"
+            className="editor-filename-input"
+            value={activeTab.name}
+            placeholder="Untitled"
+            spellCheck={false}
+            autoComplete="off"
+            aria-label="Tab name"
+            title="Edit the tab name. Clear it to restore the auto-derived label."
+            onChange={(e) => setActiveTabName(e.target.value)}
+            onBlur={commitActiveTabName}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === 'Escape') {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+          />
+          {activeTab.nameLocked ? (
+            <button
+              type="button"
+              className="btn ghost editor-filename-reset"
+              onClick={() => {
+                setActiveTabName('');
+                /** Synchronously revert to the auto-derived name so the input updates immediately. */
+                queueMicrotask(commitActiveTabName);
+              }}
+              title="Reset to auto-derived name"
+              aria-label="Reset tab name to auto-derived"
+            >
+              Auto
+            </button>
+          ) : (
+            <span
+              className="editor-filename-auto-hint muted"
+              title="This name is auto-derived from the content"
+              aria-hidden
+            >
+              auto
+            </span>
+          )}
+        </div>
 
         <div
           className={`editor-row${
@@ -1670,7 +1965,11 @@ export function JsonWorkspace() {
               Back to editor
             </button>
             <span className="compare-hint muted">
-              Only differing lines are shown (paired by line number).
+              {compareDiff.differCount === 0
+                ? 'Tabs match line-for-line.'
+                : `${compareDiff.differCount} differing line${
+                    compareDiff.differCount === 1 ? '' : 's'
+                  } highlighted (paired by line number).`}
             </span>
           </div>
           <div className="compare-split">
@@ -1679,14 +1978,17 @@ export function JsonWorkspace() {
                 {tabs.find((t) => t.id === compareAId)?.name ?? 'A'}
               </h3>
               <div className="compare-lines">
-                {compareDiff.left.map((line, i) => (
+                {compareDiff.left.map((line) => (
                   <div
-                    key={i}
-                    className={`diff-line diff-left${
-                      line === 'No differing lines.' ? ' diff-empty' : ''
-                    }`}
+                    key={line.lineNo}
+                    className={`diff-line ${
+                      line.differs ? 'diff-left' : 'diff-same'
+                    }${line.empty ? ' diff-blank' : ''}`}
                   >
-                    {line}
+                    <span className="diff-lineno" aria-hidden>
+                      {line.lineNo}
+                    </span>
+                    <span className="diff-text">{line.text}</span>
                   </div>
                 ))}
               </div>
@@ -1696,14 +1998,17 @@ export function JsonWorkspace() {
                 {tabs.find((t) => t.id === compareBId)?.name ?? 'B'}
               </h3>
               <div className="compare-lines">
-                {compareDiff.right.map((line, i) => (
+                {compareDiff.right.map((line) => (
                   <div
-                    key={i}
-                    className={`diff-line diff-right${
-                      line === 'No differing lines.' ? ' diff-empty' : ''
-                    }`}
+                    key={line.lineNo}
+                    className={`diff-line ${
+                      line.differs ? 'diff-right' : 'diff-same'
+                    }${line.empty ? ' diff-blank' : ''}`}
                   >
-                    {line}
+                    <span className="diff-lineno" aria-hidden>
+                      {line.lineNo}
+                    </span>
+                    <span className="diff-text">{line.text}</span>
                   </div>
                 ))}
               </div>
