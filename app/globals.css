@@ -199,6 +199,29 @@ body > * {
   cursor: pointer;
 }
 
+.tab-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.42rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.tab-rename-input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.tab-item.is-renaming .tab-close {
+  visibility: hidden;
+}
+
 .tab-close {
   flex-shrink: 0;
   width: 2rem;
@@ -577,6 +600,64 @@ body > * {
   overflow: hidden;
 }
 
+.editor-filename-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+  flex-shrink: 0;
+}
+
+.editor-filename-bar.hidden {
+  display: none;
+}
+
+.editor-filename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  outline: none;
+}
+
+.editor-filename-input:hover {
+  border-color: var(--border);
+}
+
+.editor-filename-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--bg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.editor-filename-input::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+  font-style: italic;
+}
+
+.editor-filename-auto-hint {
+  flex-shrink: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 0.35rem;
+}
+
+.editor-filename-reset {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 0.2rem 0.55rem;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -799,6 +880,33 @@ body > * {
   min-width: 0;
 }
 
+.editor-focus-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.editor-focus-card-copy {
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.editor-focus-card-copy:hover,
+.editor-focus-card-copy:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  outline: none;
+}
+
 .editor-focus-card-close {
   flex-shrink: 0;
   padding: 0.1rem 0.4rem;
@@ -823,16 +931,157 @@ body > * {
   overflow: auto;
   font-family: var(--mono);
   font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
+  line-height: 1.6;
   background: color-mix(in srgb, var(--bg) 75%, #0c0c0b);
   color: var(--text);
 }
 
 .editor-focus-card-value.watch-err {
   color: var(--danger);
-  white-space: normal;
+}
+
+.editor-focus-card-error {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger);
+}
+
+.json-tree {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.json-line {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.json-toggle {
+  flex-shrink: 0;
+  width: 14px;
+  height: 18px;
+  margin-right: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 18px;
+  text-align: center;
+  font-family: var(--mono);
+}
+
+.json-toggle:hover,
+.json-toggle:focus-visible {
+  color: var(--accent);
+}
+
+.json-toggle:focus {
+  outline: none;
+}
+
+.json-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.json-toggle-spacer {
+  flex-shrink: 0;
+  display: inline-block;
+  width: 14px;
+  margin-right: 2px;
+}
+
+.json-key {
+  color: #d4b07c;
+  font-weight: 500;
+}
+
+.json-key-button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.json-key-button:hover,
+.json-key-button:focus-visible {
+  color: var(--accent);
+}
+
+.json-key-button:focus {
+  outline: none;
+}
+
+.json-key-button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.json-punc {
+  color: var(--muted);
+}
+
+.json-string {
+  color: var(--success);
+  word-break: break-word;
+}
+
+.json-number {
+  color: #c8a36a;
+}
+
+.json-boolean {
+  color: var(--accent);
+}
+
+.json-null,
+.json-undefined {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.json-function,
+.json-symbol {
+  color: #b08fc4;
+  font-style: italic;
+}
+
+.json-summary {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.json-truncated-line {
+  opacity: 0.7;
+}
+
+.json-truncated {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.json-match {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 .editor-focus-card-resizer {
@@ -1184,14 +1433,33 @@ body.is-resizing-focus-card {
 }
 
 .diff-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
   padding: 0.05rem 0.5rem;
-  white-space: pre-wrap;
-  word-break: break-all;
   border-left: 3px solid transparent;
 }
 
-.diff-line.diff-same {
+.diff-lineno {
+  flex-shrink: 0;
+  width: 3ch;
+  text-align: right;
   color: var(--muted);
+  opacity: 0.7;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-line.diff-same {
+  color: var(--text);
+  opacity: 0.75;
   border-left-color: transparent;
 }
 
@@ -1207,11 +1475,10 @@ body.is-resizing-focus-card {
   color: var(--text);
 }
 
-.diff-line.diff-empty {
+.diff-line.diff-blank .diff-text::after {
+  content: '∅';
   color: var(--muted);
-  padding: 0.75rem 0.5rem;
-  border-left: none;
-  background: transparent;
+  opacity: 0.5;
 }
 
 @media (max-width: 900px) {

@@ -17,6 +17,11 @@ export type Tab = {
    * Omitted or `true` = auto-detect (default). `false` = use `lang` only.
    */
   langAuto?: boolean;
+  /**
+   * When `true`, the user has manually renamed this tab and content-driven
+   * auto-naming should be left alone. Cleared if the user resets the name.
+   */
+  nameLocked?: boolean;
   /** Lines bookmarked in the text editor (per tab). */
   bookmarks?: EditorBookmark[];
 };

@@ -67,6 +67,8 @@ export type ClosedTabSnapshot = {
   closedAt: number;
   lang?: TabLanguage;
   langAuto?: boolean;
+  /** True if the user manually set the name on this tab before closing. */
+  nameLocked?: boolean;
 };
 
 export type PersistedWorkspace = {
@@ -101,6 +103,9 @@ export function parseWorkspace(raw: string | null): PersistedWorkspace | null {
           : lang !== undefined
             ? false
             : undefined;
+      const nameLockedRaw = (t as { nameLocked?: unknown }).nameLocked;
+      const nameLocked =
+        typeof nameLockedRaw === 'boolean' ? nameLockedRaw : undefined;
       const bookmarksRaw = (t as { bookmarks?: unknown }).bookmarks;
       let bookmarks: EditorBookmark[] | undefined;
       if (Array.isArray(bookmarksRaw)) {
@@ -120,6 +125,7 @@ export function parseWorkspace(raw: string | null): PersistedWorkspace | null {
         name: typeof name === 'string' ? name : '',
         ...(lang ? { lang } : {}),
         ...(langAuto !== undefined ? { langAuto } : {}),
+        ...(nameLocked !== undefined ? { nameLocked } : {}),
         ...(bookmarks ? { bookmarks } : {}),
       });
     }
@@ -152,6 +158,9 @@ export function parseClosedHistory(raw: string | null): ClosedTabSnapshot[] {
       const langAutoRaw = (item as { langAuto?: unknown }).langAuto;
       const langAuto =
         typeof langAutoRaw === 'boolean' ? langAutoRaw : undefined;
+      const nameLockedRaw = (item as { nameLocked?: unknown }).nameLocked;
+      const nameLocked =
+        typeof nameLockedRaw === 'boolean' ? nameLockedRaw : undefined;
       out.push({
         id: typeof sid === 'string' ? sid : `legacy-${closedAt}-${out.length}`,
         text,
@@ -159,6 +168,7 @@ export function parseClosedHistory(raw: string | null): ClosedTabSnapshot[] {
         name: typeof name === 'string' ? name : '',
         ...(lang ? { lang } : {}),
         ...(langAuto !== undefined ? { langAuto } : {}),
+        ...(nameLocked !== undefined ? { nameLocked } : {}),
       });
     }
     return out.slice(0, MAX_CLOSED_HISTORY);
