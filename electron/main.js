@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -240,6 +240,14 @@ function quitGracefully(title, err) {
   }
 }
 
+ipcMain.handle('launch-chrome-debug', () => {
+  spawn(
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    ['--remote-debugging-port=9222', '--user-data-dir=/tmp/chrome-debug'],
+    { detached: true, stdio: 'ignore' }
+  ).unref();
+});
+
 function createWindow(loadUrl) {
   try {
     mainWindow = new BrowserWindow({
@@ -252,6 +260,7 @@ function createWindow(loadUrl) {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,
+        preload: path.join(__dirname, 'preload.js'),
       },
     });
 

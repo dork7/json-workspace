@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { useRouter } from 'next/navigation';
 import { foldAll, unfoldAll } from '@codemirror/language';
 import type { EditorView } from '@codemirror/view';
 import {
@@ -51,6 +52,7 @@ const WorkspaceEditor = dynamic(
   () => import('@/components/WorkspaceEditor'),
   { ssr: false }
 );
+
 
 const WATCH_VALUE_MAX = 4000;
 
@@ -215,6 +217,8 @@ export function JsonWorkspace() {
   const [editorDragOver, setEditorDragOver] = useState(false);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+
+  const router = useRouter();
 
   const editorViewRef = useRef<EditorView | null>(null);
   const watchInputRef = useRef<HTMLInputElement>(null);
@@ -1750,6 +1754,23 @@ export function JsonWorkspace() {
               title="Copy the full contents of this tab to the clipboard"
             >
               Copy all
+            </button>
+            <span className="toolbar-sep" aria-hidden />
+            <button
+              type="button"
+              className="btn"
+              title="Launch Chrome with remote debugging and open the logs viewer"
+              onClick={() => {
+                const win = window as unknown as { electron?: { launchChromeDebug: () => Promise<void> } };
+                if (win.electron) {
+                  void win.electron.launchChromeDebug();
+                } else {
+                  void fetch('/api/chrome-debug', { method: 'POST' });
+                }
+                router.push('/chrome-logs');
+              }}
+            >
+              Chrome Debug
             </button>
           </div>
           <div className="toolbar-search" id="toolbar-search">
